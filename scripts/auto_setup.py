@@ -65,31 +65,44 @@ def main():
 
     # Step 1: Fix existing aura-v3 directory
     print("\n[1/9] Checking existing installation...")
+
+    # Check if we're already inside aura-v3 directory
+    current_dir = os.getcwd()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)  # Parent of scripts/
+
+    # Check if we're inside aura-v3 directory structure
     aura_dir = os.path.expanduser("~/aura-v3")
 
-    if os.path.exists(aura_dir):
-        print(f"Found existing {aura_dir}")
-        # Check if it's a git repo, if not remove and re-clone
-        if not os.path.exists(os.path.join(aura_dir, ".git")):
-            print("Not a git repo, removing...")
-            try:
-                shutil.rmtree(aura_dir)
-            except Exception as e:
-                print(f"Could not remove: {e}")
+    # Determine the correct project directory
+    # Priority: 1. Current dir if it looks like project root, 2. ~/aura-v3
+    if os.path.exists(os.path.join(current_dir, "main.py")):
+        project_dir = current_dir
+        print(f"Using current directory as project: {project_dir}")
+    elif os.path.exists(os.path.join(project_root, "main.py")):
+        project_dir = project_root
+        print(f"Using script parent as project: {project_dir}")
+    elif os.path.exists(aura_dir):
+        project_dir = aura_dir
+        print(f"Using home aura-v3: {project_dir}")
+    else:
+        # Need to clone
+        project_dir = None
 
-    # Clone fresh
-    if not os.path.exists(aura_dir):
+    # If we need to clone (no existing installation)
+    if project_dir is None:
         os.chdir(os.path.expanduser("~"))
         run_cmd(
             "git clone https://github.com/AdityaPagare619/aura-v3.git",
-            "Cloning fresh copy",
+            "Cloning AURA v3",
         )
+        project_dir = aura_dir
 
-    os.chdir(aura_dir)
+    os.chdir(project_dir)
     print(f"Working in: {os.getcwd()}")
 
     # Pull latest if git exists
-    if os.path.exists(os.path.join(aura_dir, ".git")):
+    if os.path.exists(os.path.join(project_dir, ".git")):
         run_cmd("git pull origin main", "Pulling latest updates")
 
     # Step 2: Create required directories

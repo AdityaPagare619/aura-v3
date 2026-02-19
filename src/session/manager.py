@@ -168,17 +168,40 @@ class EncryptedStorage:
 class SessionManager:
     """Manages conversation sessions with encryption"""
 
-    def __init__(self, storage_path: str, encryption_key: bytes = None):
+    def __init__(
+        self,
+        storage_path: str,
+        encryption_key: bytes = None,
+        encryption: bool = True,
+        max_history: int = 100,
+    ):
         self.storage_path = storage_path
+        self.encryption_enabled = encryption
+        self._max_history = max_history
 
-        if encryption_key is None:
+        if encryption_key is None and encryption:
             encryption_key = self._generate_key()
+        elif encryption_key is None:
+            encryption_key = b"dummy"  # Placeholder when encryption disabled
 
         self._storage = EncryptedStorage(storage_path, encryption_key)
         self._sessions: Dict[str, Session] = {}
         self._active_session: Optional[str] = None
-        self._max_history = 100
         self._session_ttl = timedelta(days=30)
+
+    async def initialize(self):
+        """Initialize session manager"""
+        # Ensure storage directory exists
+        Path(self.storage_path).mkdir(parents=True, exist_ok=True)
+        # Load persisted sessions
+        persisted = await self._storage.list_keys()
+        for session_id in persisted[:10]:  # Load last 10
+            await self.load_session(session_id)
+
+    async def save_all(self):
+        """Save all active sessions"""
+        for session_id in list(self._sessions.keys()):
+            await self.persist_session(session_id)
 
     def _generate_key(self) -> bytes:
         key_file = Path(self.storage_path) / ".key"

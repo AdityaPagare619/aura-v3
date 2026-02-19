@@ -44,10 +44,18 @@ class ToolStats:
 
 
 class LearningEngine:
-    def __init__(self, memory, patterns_path: str):
+    def __init__(
+        self,
+        memory=None,
+        patterns_path: str = "data/patterns",
+        min_confidence: float = 0.6,
+        max_patterns: int = 1000,
+    ):
         self.memory = memory
         self.patterns_path = Path(patterns_path)
         self.patterns_path.mkdir(parents=True, exist_ok=True)
+        self.min_confidence = min_confidence
+        self.max_patterns = max_patterns
 
         self.intent_patterns: Dict[str, IntentPattern] = {}
         self.contact_records: Dict[str, ContactRecord] = {}
@@ -63,6 +71,16 @@ class LearningEngine:
         if not self._initialized:
             await asyncio.get_event_loop().run_in_executor(None, self.load_patterns)
             self._initialized = True
+
+    async def get_pattern_count(self) -> int:
+        """Get count of learned patterns"""
+        return (
+            len(self.intent_patterns) + len(self.contact_records) + len(self.tool_stats)
+        )
+
+    async def save_all(self):
+        """Save all patterns to disk"""
+        self.save_patterns()
 
     def _normalize_text(self, text: str) -> str:
         return re.sub(r"\s+", " ", text.lower().strip())

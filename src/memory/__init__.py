@@ -537,6 +537,30 @@ class HierarchicalMemory:
         """Learn a user preference"""
         self.self_model.learn(preference, value, "preference")
 
+    async def initialize(self):
+        """Initialize memory system - called at startup"""
+        logger.info("Initializing Hierarchical Memory...")
+        # Long-term memory initializes its DB in __init__
+        # Self-model initializes in __init__
+        # Just verify DB paths exist
+        import os
+
+        os.makedirs(os.path.dirname(self.long_term.db_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self.self_model.db_path), exist_ok=True)
+        logger.info("Hierarchical Memory initialized")
+
+    async def persist(self):
+        """Persist any pending data - called at shutdown"""
+        logger.info("Persisting memory data...")
+        # Short-term and working are in-memory, auto-cleared
+        # Long-term is already persisted to SQLite
+        # Self-model is already persisted to SQLite
+        logger.info("Memory persisted")
+
+    def get_stats(self) -> str:
+        """Get memory statistics"""
+        return f"Working: {len(self.working.items)}/{self.working.max_size}, Short-term: {len(self.short_term.items)}/{self.short_term.max_size}"
+
     def get_user_preference(self, preference: str, default: Any = None) -> Any:
         """Get a user preference"""
         return self.self_model.get(preference, default)
