@@ -20,18 +20,28 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
 
+# Create required directories BEFORE logging
+for d in ["logs", "data/memories", "data/sessions", "data/patterns", "models"]:
+    os.makedirs(d, exist_ok=True)
+
 import yaml
 
-from src.agent.loop import ReActAgent, AgentFactory
-from src.tools.registry import ToolRegistry, ToolExecutor
-from src.memory import HierarchicalMemory
-from src.learning.engine import LearningEngine
-from src.context.detector import ContextDetector
-from src.security.permissions import SecurityLayer, PermissionLevel
-from src.llm import LLMRunner, MockLLM
-from src.channels.voice import VoiceChannel
-from src.session.manager import SessionManager
+# Import with fallback
+try:
+    from src.agent.loop import ReActAgent, AgentFactory
+    from src.tools.registry import ToolRegistry, ToolExecutor
+    from src.memory import HierarchicalMemory
+    from src.learning.engine import LearningEngine
+    from src.context.detector import ContextDetector
+    from src.security.permissions import SecurityLayer, PermissionLevel
+    from src.llm import LLMRunner, MockLLM
+    from src.channels.voice import VoiceChannel
+    from src.session.manager import SessionManager
 
+    IMPORTS_OK = True
+except ImportError as e:
+    print(f"Import error: {e}")
+    IMPORTS_OK = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,13 +107,7 @@ class AURA:
             )
             await self.memory.initialize()
 
-            logger.info("[3/7] Loading tools...")
-            self.tools = ToolRegistry()
-            self.tool_executor = ToolExecutor(self.tools, self.security)
-            self.tools.load_all_tools()
-            logger.info(f"Loaded {len(self.tools.list_tools())} tools")
-
-            logger.info("[4/7] Setting up security layer...")
+            logger.info("[3/7] Setting up security layer...")
             security_config = self.config.get("security", {})
             self.security = SecurityLayer(
                 default_level=PermissionLevel[
@@ -112,6 +116,12 @@ class AURA:
                 audit_log_path=security_config.get("audit_log", "logs/security.log"),
                 banking_protection=security_config.get("banking_protection", True),
             )
+
+            logger.info("[4/7] Loading tools...")
+            self.tools = ToolRegistry()
+            self.tool_executor = ToolExecutor(self.tools, self.security)
+            self.tools.load_all_tools()
+            logger.info(f"Loaded {len(self.tools.list_tools())} tools")
 
             logger.info("[5/7] Initializing learning engine...")
             learning_config = self.config.get("learning", {})

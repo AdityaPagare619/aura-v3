@@ -458,6 +458,27 @@ Then send me your token to continue.
             logger.error(f"Process error: {e}")
             await update.message.reply_text(f"Error: {str(e)[:100]}")
 
+    async def restart_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Restart AURA"""
+        await update.message.reply_text("🔄 Restarting AURA...")
+        try:
+            await self.aura.shutdown()
+            await self.aura.initialize()
+            await update.message.reply_text("✅ AURA restarted successfully!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Restart failed: {str(e)[:100]}")
+
+    async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Stop AURA"""
+        await update.message.reply_text("🛑 Stopping AURA...")
+        try:
+            await self.aura.shutdown()
+            await update.message.reply_text(
+                "✅ AURA stopped. To restart, run the bot again."
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ Stop failed: {str(e)[:100]}")
+
     def run(self, token: str):
         """Start the bot"""
         if not TELEGRAM_AVAILABLE:
@@ -480,6 +501,7 @@ Then send me your token to continue.
         app.add_handler(CommandHandler("memory", self.memory_command))
         app.add_handler(CommandHandler("clear", self.clear_command))
         app.add_handler(CommandHandler("restart", self.restart_command))
+        app.add_handler(CommandHandler("stop", self.stop_command))
         app.add_handler(CommandHandler("setup", self.setup_command))
         app.add_handler(CommandHandler("test", self.test_command))
 
