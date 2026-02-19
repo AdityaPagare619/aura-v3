@@ -1,0 +1,56 @@
+# AURA v3 Configuration
+# Optimized for 4GB RAM mobile devices
+
+# LLM Settings
+llm:
+  model_type: "llama"
+  model_path: "models/qwen2.5-1b-q5_k_m.gguf"
+  quantization: "q5_k_m"
+  max_context: 4096
+  n_gpu_layers: 0  # CPU-only for mobile
+  temperature: 0.7
+  max_tokens: 512
+
+# Memory Settings
+memory:
+  working_size: 10
+  short_term_size: 100
+  db_path: "data/memories/aura.db"
+  self_model_path: "data/memories/self_model.db"
+
+# Learning Settings  
+learning:
+  patterns_path: "data/patterns"
+  min_confidence: 0.6
+  max_patterns: 1000
+
+# Security Settings
+security:
+  default_level: "L2"  # L1, L2, L3, L4
+  audit_log: "logs/security.log"
+  banking_protection: true
+
+# Context Detection
+context:
+  work_start_hour: 9
+  work_end_hour: 18
+  sleep_start_hour: 23
+  sleep_end_hour: 7
+
+# Voice Settings
+voice:
+  tts_engine: "sarvam"
+  language: "en"
+  speed: 1.0
+
+# Session Settings
+session:
+  storage_path: "data/sessions"
+  encryption: true
+  max_history: 100
+
+# Performance
+performance:
+  max_react_iterations: 10
+  tool_timeout: 30
+  thermal_monitoring: true
