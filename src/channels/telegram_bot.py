@@ -7,6 +7,8 @@ Commands:
 /start - Start AURA
 /stop - Stop AURA
 /status - Check status
+/setup - Interactive setup wizard
+/test - Test if everything works
 /config - Show current config
 /setmodel <model> - Set LLM model
 /setvoice <voice> - Set voice engine
@@ -109,6 +111,11 @@ Send me a message and I'll help you!
 /start - Start AURA
 /stop - Stop AURA  
 /status - System status
+/restart - Restart AURA
+
+*⚙️ Setup:*
+/setup - Interactive setup wizard
+/test - Test system functionality
 
 *⚙️ Configuration:*
 /config - Show current config
@@ -123,7 +130,6 @@ Send me a message and I'll help you!
 
 *🗑️ Utility:*
 /clear - Clear conversation
-/restart - Restart AURA
 
 *💬 Just chat with me!*
 """
@@ -318,12 +324,120 @@ Then download GGUF file to models/
             del self.user_sessions[user_id]
         await update.message.reply_text("✅ Conversation cleared!")
 
-    async def restart_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Restart AURA"""
-        await update.message.reply_text("🔄 Restarting AURA...")
-        if hasattr(self.aura, "restart"):
-            await self.aura.restart()
-        await update.message.reply_text("✅ AURA restarted!")
+    async def setup_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Interactive setup wizard"""
+        user_id = update.effective_user.id
+        chat_id = update.effective_chat.id
+
+        welcome = """
+🔧 *AURA Setup Wizard*
+
+I'll guide you through setting up AURA step by step.
+
+*Step 1: Telegram Token*
+"""
+
+        token = self.config.get("telegram", {}).get("token", "")
+
+        if not token:
+            welcome += """
+You haven't set up a Telegram token yet.
+
+*How to get a token:*
+1. Open Telegram → Search @BotFather
+2. Send /newbot
+3. Follow the prompts
+4. Copy the token (something like: 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11)
+
+Then send me your token to continue.
+"""
+            await update.message.reply_text(welcome, parse_mode="Markdown")
+
+            self.user_sessions[user_id] = "setup_token"
+            return
+
+        welcome += f"✅ Token configured: `{token[:10]}...`\n\n"
+
+        llm_loaded = (
+            hasattr(self.aura, "llm") and self.aura.llm.is_loaded()
+            if hasattr(self.aura, "llm")
+            else False
+        )
+
+        welcome += f"*Step 2: LLM Model*\n"
+        if llm_loaded:
+            welcome += "✅ LLM loaded and ready!\n\n"
+        else:
+            welcome += "⚠️ LLM not loaded (optional)\n\n"
+
+        level = self.config.get("security", {}).get("default_level", "L2")
+        welcome += f"*Step 3: Security Level*\n"
+        welcome += f"Current: {level}\n\n"
+
+        welcome += "*Setup Complete!*\n"
+        welcome += "Run /test to verify everything works."
+
+        await update.message.reply_text(welcome, parse_mode="Markdown")
+
+    async def test_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Test if everything works"""
+        tests = []
+
+        test_name = "Python Imports"
+        try:
+            import aiofiles
+            import yaml
+            import cryptography
+
+            tests.append((test_name, True, "All core imports OK"))
+        except ImportError as e:
+            tests.append((test_name, False, str(e)))
+
+        test_name = "Config File"
+        if os.path.exists(self.config_path):
+            tests.append((test_name, True, f"Loaded from {self.config_path}"))
+        else:
+            tests.append((test_name, False, "Config not found"))
+
+        test_name = "Telegram API"
+        token = self.config.get("telegram", {}).get("token", "")
+        if token:
+            tests.append((test_name, True, f"Token: {token[:10]}..."))
+        else:
+            tests.append((test_name, False, "No token configured"))
+
+        test_name = "LLM Module"
+        if hasattr(self.aura, "llm"):
+            llm_loaded = (
+                self.aura.llm.is_loaded()
+                if hasattr(self.aura.llm, "is_loaded")
+                else False
+            )
+            if llm_loaded:
+                tests.append((test_name, True, "Model loaded"))
+            else:
+                tests.append((test_name, True, "Module available (no model)"))
+        else:
+            tests.append((test_name, False, "LLM not initialized"))
+
+        test_name = "Memory Module"
+        if hasattr(self.aura, "memory"):
+            tests.append((test_name, True, "Memory module available"))
+        else:
+            tests.append((test_name, False, "Memory not initialized"))
+
+        result = "🧪 *Test Results*\n\n"
+
+        passed = 0
+        for name, success, msg in tests:
+            status = "✅" if success else "❌"
+            result += f"{status} *{name}*: {msg}\n"
+            if success:
+                passed += 1
+
+        result += f"\n*{passed}/{len(tests)} tests passed*"
+
+        await update.message.reply_text(result, parse_mode="Markdown")
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle regular messages - chat with AURA"""
@@ -366,6 +480,8 @@ Then download GGUF file to models/
         app.add_handler(CommandHandler("memory", self.memory_command))
         app.add_handler(CommandHandler("clear", self.clear_command))
         app.add_handler(CommandHandler("restart", self.restart_command))
+        app.add_handler(CommandHandler("setup", self.setup_command))
+        app.add_handler(CommandHandler("test", self.test_command))
 
         # Messages
         app.add_handler(

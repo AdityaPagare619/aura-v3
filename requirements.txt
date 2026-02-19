@@ -1,20 +1,19 @@
 # AURA v3 Dependencies
-# Optimized for mobile/Termux
-
-# Core
+# Core (required)
 aiofiles>=23.0.0
 pyyaml>=6.0
-
-# LLM - for offline inference
-llama-cpp-python>=0.2.0
-
-# Crypto for encrypted sessions
 cryptography>=41.0.0
 
-# Telegram Bot (optional - for Telegram control)
+# LLM (optional - for advanced users)
+# Install manually if needed:
+# pip install llama-cpp-python
+# Or use pre-built wheels from:
+# https://github.com/abetlen/llama-cpp-python/releases
+
+# Telegram Bot
 python-telegram-bot>=20.0
 
-# Voice (optional - for TTS)
+# Voice (optional)
 # pyttsx3>=2.90
 
 # Testing
