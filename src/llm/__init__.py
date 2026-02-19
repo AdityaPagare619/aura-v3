@@ -203,6 +203,12 @@ class LLMRunner:
         self.loaded = False
         logger.info("Model unloaded")
 
+    def unload(self):
+        """Sync wrapper for unload_model"""
+        # For sync context, just set loaded to False
+        self.loaded = False
+        logger.info("Model unload requested")
+
 
 # Export for easy use
 __all__ = ["LLMRunner", "LLMConfig", "MockLLM"]
@@ -223,3 +229,12 @@ class MockLLM(LLMRunner):
     async def generate(self, messages, max_tokens=None, temperature=None):
         """Always use mock generation"""
         return await self._mock_generate(messages)
+
+    async def unload_model(self):
+        """Mock unload - nothing to do"""
+        self.loaded = False
+        logger.info("Mock model unloaded")
+
+    def unload(self):
+        """Sync wrapper for unload"""
+        self.loaded = False

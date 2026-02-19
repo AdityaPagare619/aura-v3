@@ -427,19 +427,35 @@ class AURA:
         print()
 
     async def shutdown(self):
-        """Graceful shutdown"""
+        """Graceful shutdown with error handling"""
         logger.info("Shutting down AURA...")
         self._running = False
         self._shutdown_event.set()
 
+        # Safely shutdown each component
         if self.sessions:
-            await self.sessions.save_all()
+            try:
+                await self.sessions.save_all()
+            except Exception as e:
+                logger.error(f"Session save error: {e}")
 
         if self.memory:
-            await self.memory.persist()
+            try:
+                await self.memory.persist()
+            except Exception as e:
+                logger.error(f"Memory persist error: {e}")
 
         if self.llm:
-            self.llm.unload()
+            try:
+                self.llm.unload()
+            except Exception as e:
+                logger.error(f"LLM unload error: {e}")
+
+        if self.learning:
+            try:
+                await self.learning.save_all()
+            except Exception as e:
+                logger.error(f"Learning save error: {e}")
 
         logger.info("AURA shutdown complete")
 
