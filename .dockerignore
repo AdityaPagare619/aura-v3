@@ -1,0 +1,109 @@
+# ===========================================
+# AURA v3 Docker Ignore
+# Excludes unnecessary files from Docker build
+# ===========================================
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# Linting
+.ruff_cache/
+.ruff_cache/
+pylint/
+mypy_cache/
+
+# Documentation (not needed in container)
+*.md
+docs/
+!README.md
+
+# Configuration with secrets
+config.yaml
+.env
+.env.*
+!.env.example
+
+# Temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Node.js (if present)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Test data
+test_models/
+tests/
+test_script.py
+
+# Data (handled by volumes)
+data/
+models/
+!data/.gitkeep
+!models/.gitkeep
+
+# External docs
+External-Researched-docs/
+installation/
+android-bridge/
+compliance/
+
+# Large binaries
+*.bin
+*.gguf
+*.pt
+*.pth
+*.onnx
+
+# HTML (index files)
+index.html
+
+# Ruff cache
+.ruff_cache/
+
+# Null file
+nul

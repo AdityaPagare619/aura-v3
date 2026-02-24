@@ -1,0 +1,22 @@
+{
+  "stage": "acquaintance",
+  "metrics": {
+    "interaction_count": 2,
+    "conversation_depth_score": 0.020460000000000002,
+    "trust_level": 0.75,
+    "interests_alignment": 0.0,
+    "help_requests_given": 0,
+    "help_requests_received": 0,
+    "positive_interactions": 2,
+    "negative_interactions": 0,
+    "first_interaction": "2026-02-24T03:31:08.050656",
+    "last_interaction": "2026-02-24T03:31:08.050656",
+    "streak_days": 0,
+    "recent_conversation_topics": [
+      "work",
+      "work"
+    ]
+  },
+  "manual_stage_override": null,
+  "last_updated": "2026-02-24T03:31:08.056007"
+}

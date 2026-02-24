@@ -1,0 +1,30 @@
+{
+  "workouts": [
+    {
+      "id": "69a00f79",
+      "workout_type": "running",
+      "name": "Running Workout",
+      "duration_minutes": 30,
+      "intensity": "moderate",
+      "calories_burned": 300.0,
+      "heart_rate_avg": 0.0,
+      "heart_rate_max": 0.0,
+      "distance": 0.0,
+      "timestamp": "2026-02-22T14:19:29.608938",
+      "notes": ""
+    },
+    {
+      "id": "37bd61f9",
+      "workout_type": "running",
+      "name": "Running Workout",
+      "duration_minutes": 30,
+      "intensity": "moderate",
+      "calories_burned": 300.0,
+      "heart_rate_avg": 0.0,
+      "heart_rate_max": 0.0,
+      "distance": 0.0,
+      "timestamp": "2026-02-22T14:20:49.139756",
+      "notes": ""
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+# AURA v3 Configuration Example
+# ==============================
+# Copy this to config.yaml and customize
+
+# Core Settings
+core:
+  # LLM Configuration
+  llm:
+    provider: "llama.cpp"  # Options: llama.cpp, ollama, transformers
+    model_path: "./models/llama-7b-chat.gguf"
+    max_tokens: 1024
+    temperature: 0.7
+    n_gpu_layers: 99  # For GPU acceleration (Android)
+    n_ctx: 2048
+    preload: true
+    
+  # Memory Configuration
+  memory:
+    episodic_limit: 1000
+    semantic_limit: 5000
+    consolidation_interval: 3600
+    importance_threshold: 0.5
+
+# Power Management
+power:
+  full_power_threshold: 50    # % battery for full power mode
+  balanced_threshold: 20     # % battery for balanced mode
+  power_save_threshold: 10   # % battery for power save
+  critical_threshold: 5       # % battery for critical mode
+  
+  # Processing limits per power mode
+  max_tokens_full: 2048
+  max_tokens_balanced: 1024
+  max_tokens_save: 512
+  max_tokens_ultra: 256
+  
+  # Tick rates (seconds between processing cycles)
+  tick_rate_full: 1.0
+  tick_rate_balanced: 2.0
+  tick_rate_save: 5.0
+  tick_rate_ultra: 30.0
+  
+  # Power optimization options
+  enable_aggressive_power_save: false  # Enable for more aggressive battery saving
+  thermal_throttle_threshold: 42     # Celsius - start throttling
+  max_cpu_percent: 70                 # Maximum CPU usage
+  background_task_enabled: true        # Allow background tasks
+  proactive_features_enabled: true     # Allow proactive features
+
+# Privacy Settings
+privacy:
+  log_level: "WARNING"  # DEBUG, INFO, WARNING, ERROR
+  store_conversations: true
+  anonymize_data: true
+  allow_telemetry: false
+  encrypt_storage: false
+  
+# Features
+features:
+  voice_enabled: false
+  voice_language: "en"
+  proactive_mode: true
+  background_tasks: true
+  notifications: true
+  adaptive_personality: true
+  life_tracking: true
+
+# Security
+security:
+  require_auth: false
+  auth_method: "pin"  # pin, biometric
+  session_timeout: 3600  # seconds
+  max_failed_attempts: 5
+  lockout_duration: 300  # seconds
+
+# Network (for optional features)
+network:
+  allow_outgoing: false  # Keep false for maximum privacy
+  proxy_enabled: false
+  proxy_url: ""
+
+# Storage
+storage:
+  data_path: "./data"
+  logs_path: "./logs"
+  cache_path: "./cache"
+  max_log_size_mb: 100
+
+# Debug
+debug:
+  verbose_logging: false
+  save_memory_snapshots: false
+  profile_performance: false

@@ -1,0 +1,136 @@
+# ===========================================
+# AURA v3 Docker Compose
+# Local development and production orchestration
+# ===========================================
+
+services:
+  # AURA Core Service
+  aura:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: aura-v3
+    restart: unless-stopped
+    ports:
+      - "5000:5000"  # API Server
+      - "8080:8080"  # Dashboard
+    environment:
+      - AURA_ENV=production
+      - AURA_API_PORT=5000
+      - AURA_DASHBOARD_PORT=8080
+      - AURA_DATA_DIR=/app/data
+      - AURA_MODELS_DIR=/app/models
+      - AURA_LOG_LEVEL=INFO
+      # LLM Configuration
+      - LLM_BACKEND=ollama
+      - LLM_MODEL=llama2:7b
+      - LLM_HOST=ollama:11434
+      # Telegram (optional)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      # Security
+      - AURA_ENCRYPT_STORAGE=true
+      - AURA_SECURITY_LEVEL=PIN
+    volumes:
+      - aura_data:/app/data
+      - aura_models:/app/models
+      - aura_cache:/app/.cache
+      - aura_logs:/app/logs
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - aura-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # Deploy resources
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+  # Ollama Service (Local LLM)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aura-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_MODELS=/root/.ollama/models
+      # GPU support (uncomment for NVIDIA GPU)
+      # - NVIDIA_VISIBLE_DEVICES=all
+      # - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    networks:
+      - aura-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # Optional: Development service with hot reload
+  aura-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: aura-v3-dev
+    restart: unless-stopped
+    ports:
+      - "5001:5000"
+      - "8081:8080"
+    environment:
+      - AURA_ENV=development
+      - AURA_DEBUG=true
+      - AURA_API_PORT=5000
+      - AURA_DASHBOARD_PORT=8080
+      - LLM_BACKEND=ollama
+      - LLM_HOST=ollama:11434
+    volumes:
+      - ./src:/app/src:ro
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - aura-network
+    profiles:
+      - dev
+    command: python -m src.main --dev --api-port 5000 --dashboard-port 8080
+
+volumes:
+  # Persistent data volumes
+  aura_data:
+    driver: local
+  aura_models:
+    driver: local
+  aura_cache:
+    driver: local
+  aura_logs:
+    driver: local
+  ollama_data:
+    driver: local
+
+networks:
+  aura-network:
+    driver: bridge
+    name: aura_network

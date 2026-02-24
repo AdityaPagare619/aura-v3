@@ -1,0 +1,52 @@
+{
+  "insights": [
+    {
+      "id": "7e06c751",
+      "title": "Insufficient Sleep",
+      "description": "You slept only 0.0 hours last night. Adults need 7-9 hours for optimal health.",
+      "priority": "high",
+      "category": "sleep",
+      "recommendation": "Try to establish a consistent bedtime routine.",
+      "action_items": [
+        "Set a bedtime",
+        "Avoid screens before bed",
+        "Keep bedroom cool"
+      ],
+      "created_at": "2026-02-22T14:19:29.601607",
+      "is_read": false,
+      "is_dismissed": false
+    },
+    {
+      "id": "8ed3215d",
+      "title": "Stay Hydrated",
+      "description": "You've consumed only 0ml of water today. Aim for at least 2,500ml.",
+      "priority": "medium",
+      "category": "nutrition",
+      "recommendation": "Keep a water bottle nearby and set reminders to drink.",
+      "action_items": [
+        "Drink water with meals",
+        "Set hydration reminders",
+        "Add lemon for flavor"
+      ],
+      "created_at": "2026-02-22T14:19:29.608938",
+      "is_read": false,
+      "is_dismissed": false
+    },
+    {
+      "id": "ae1b4ff9",
+      "title": "Low Active Minutes",
+      "description": "You've been active for only 0 minutes today. Aim for at least 30.",
+      "priority": "medium",
+      "category": "fitness",
+      "recommendation": "Incorporate more movement into your day.",
+      "action_items": [
+        "Take walking breaks",
+        "Do stretching at desk",
+        "Park farther away"
+      ],
+      "created_at": "2026-02-22T14:19:29.608938",
+      "is_read": false,
+      "is_dismissed": false
+    }
+  ]
+}

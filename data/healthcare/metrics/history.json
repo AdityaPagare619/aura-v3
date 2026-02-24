@@ -1,0 +1,52 @@
+{
+  "metrics": [
+    {
+      "id": "f70663eb",
+      "metric_type": "steps",
+      "value": 8500.0,
+      "unit": "",
+      "timestamp": "2026-02-22T14:19:29.601607",
+      "source": "manual"
+    },
+    {
+      "id": "df524b41",
+      "metric_type": "steps",
+      "value": 8500.0,
+      "unit": "",
+      "timestamp": "2026-02-22T14:20:49.139756",
+      "source": "manual"
+    },
+    {
+      "id": "e7cfbc28",
+      "metric_type": "calories_burned",
+      "value": 300.0,
+      "unit": "kcal",
+      "timestamp": "2026-02-22T14:19:29.611480",
+      "source": "manual"
+    },
+    {
+      "id": "90d437ca",
+      "metric_type": "calories_burned",
+      "value": 300.0,
+      "unit": "kcal",
+      "timestamp": "2026-02-22T14:20:49.146746",
+      "source": "manual"
+    },
+    {
+      "id": "17b2c76b",
+      "metric_type": "active_minutes",
+      "value": 30,
+      "unit": "minutes",
+      "timestamp": "2026-02-22T14:19:29.611480",
+      "source": "manual"
+    },
+    {
+      "id": "4d9bcafe",
+      "metric_type": "active_minutes",
+      "value": 30,
+      "unit": "minutes",
+      "timestamp": "2026-02-22T14:20:49.146746",
+      "source": "manual"
+    }
+  ]
+}

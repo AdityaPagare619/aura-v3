@@ -1,0 +1,9 @@
+{
+  "tone": "encouraging",
+  "response_style": "action_oriented",
+  "formality": 0.5,
+  "empathy": 0.8,
+  "directness": 0.5,
+  "humor": 0.3,
+  "patience": 0.7
+}

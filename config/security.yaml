@@ -1,0 +1,32 @@
+security:
+  # Encryption settings
+  encrypt_by_default: true
+  encryption_algorithm: fernet
+  key_derivation_iterations: 100000
+  
+  # Authentication settings
+  require_auth: false
+  auth_method: pin
+  pin_length: 4
+  max_failed_attempts: 5
+  lockout_duration_minutes: 15
+  
+  # Session settings
+  session_timeout_minutes: 30
+  auto_lock_on_background: true
+  allow_multiple_sessions: true
+  
+  # Biometric options (future)
+  biometric_enabled: false
+  biometric_type: fingerprint
+  
+  # Privacy warnings
+  warn_if_no_auth: true
+  
+# Storage path for security data
+storage_path: data/security
+
+# Warning messages
+messages:
+  no_auth_warning: "Warning: Authentication not enabled. Consider setting up PIN for security."
+  encryption_disabled: "Encryption is disabled. Your data may be stored in plain text."

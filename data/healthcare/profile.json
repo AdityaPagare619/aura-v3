@@ -1,0 +1,15 @@
+{
+  "user_id": "test_user",
+  "age": 30,
+  "gender": "male",
+  "height_cm": 175,
+  "weight_kg": 70,
+  "target_weight_kg": 68,
+  "activity_level": "moderate",
+  "goals": [
+    "weight_loss",
+    "endurance"
+  ],
+  "dietary_restrictions": [],
+  "allergies": []
+}

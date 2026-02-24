@@ -1,0 +1,32 @@
+privacy:
+  categories:
+    banking_apps: sensitive
+    calendar: private
+    contacts: private
+    crypto: sensitive
+    email: private
+    fitness_data: sensitive
+    gallery_videos: private
+    general_files: public
+    medical_apps: sensitive
+    news_apps: public
+    notes: private
+    payment_apps: sensitive
+    screenshots: private
+    slack: sensitive
+    sleep_data: sensitive
+    sms: private
+    social_media: public
+    teams: sensitive
+    telegram_chats: private
+    weather: public
+    whatsapp: private
+    work_documents: sensitive
+  confirm:
+    confirm_private_always: true
+    confirm_sensitive_writes: true
+    log_permissions: true
+    private_always: true
+    public_proactive: true
+    sensitive_writes: true
+  default_tier: sensitive

@@ -1,0 +1,22 @@
+---
+name: contacts
+description: "Access and manage device contacts. Use when: user wants to find a contact, get phone number, see contact details, or find who called."
+icon: "📇"
+platforms: ["android"]
+category: "communication"
+capabilities:
+  - "file_access"
+trigger_patterns:
+  - "contact"
+  - "phone number"
+  - "call"
+  - "who is"
+  - "find person"
+requires:
+  bins: []
+  env: []
+---
+
+# Contacts App
+
+Access device contacts through Termux content provider.

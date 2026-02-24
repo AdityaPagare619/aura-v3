@@ -1,0 +1,14 @@
+{
+  "user_id": "test_user",
+  "preferred_workout_times": [],
+  "preferred_meal_times": {},
+  "disliked_foods": [],
+  "liked_foods": [],
+  "workout_preferences": [
+    "running"
+  ],
+  "notification_preferences": {},
+  "insight_priority_focus": [],
+  "motivational_style": "encouraging",
+  "response_to_insights": "action"
+}

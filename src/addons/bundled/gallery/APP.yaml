@@ -1,0 +1,26 @@
+---
+name: gallery
+description: "Access device photo gallery and image files. Use when: user wants to find photos, list images, search for pictures by name or date."
+icon: "🖼️"
+platforms: ["android"]
+category: "media"
+capabilities:
+  - "file_access"
+trigger_patterns:
+  - "find photo"
+  - "show me image"
+  - "list pictures"
+  - "gallery"
+  - "my photos"
+  - "camera folder"
+requires:
+  bins: []
+  env: []
+fallback_apps:
+  - "whatsapp_media"
+  - "telegram_files"
+---
+
+# Gallery App
+
+See accompanying APP.md for detailed documentation.
