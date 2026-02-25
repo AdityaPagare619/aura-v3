@@ -1,520 +1,457 @@
-"""
-AURA v3 Session Manager
-Comprehensive session management for all interaction types
-"""
+"""Session management with encrypted storage for AURA."""
 
 import asyncio
-import os
-import base64
+import hashlib
 import json
 import logging
-import hashlib
-import secrets
-from pathlib import Path
-from typing import Dict, Optional, Any, List
-from dataclasses import dataclass, field
-from enum import Enum
+import os
+import uuid
+from base64 import b64decode, b64encode
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
-from collections import deque
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
 
-class SessionType(Enum):
-    """Types of sessions"""
+try:
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-    INTERACTION = "interaction"  # Regular text interaction
-    VOICE = "voice"  # Voice conversation
-    TASK = "task"  # Task execution
-    LEARNING = "learning"  # Learning session
-    PROACTIVE = "proactive"  # Proactive suggestion session
-    EMERGENCY = "emergency"  # Emergency handling
-
-
-class SessionState(Enum):
-    """Session states"""
-
-    ACTIVE = "active"
-    IDLE = "idle"
-    PAUSED = "paused"
-    ENDED = "ended"
+    CRYPTO_AVAILABLE = True
+except ImportError:
+    CRYPTO_AVAILABLE = False
+    logger.warning(
+        "cryptography package not available. Sessions will not be encrypted."
+    )
 
 
 @dataclass
-class SessionConfig:
-    """Session configuration"""
+class Message:
+    role: str
+    content: str
+    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
-    session_type: SessionType = SessionType.INTERACTION
-    timeout_minutes: int = 30
-    auto_save: bool = True
-    max_history: int = 100
-    encryption_enabled: bool = True
+    def to_dict(self) -> Dict:
+        return asdict(self)
 
-
-@dataclass
-class InteractionTurn:
-    """Single interaction in a session"""
-
-    turn_id: str
-    timestamp: datetime
-    user_input: str
-    aura_response: str
-    context: Dict[str, Any] = field(default_factory=dict)
-    processing_time_ms: int = 0
-    tokens_used: int = 0
-    success: bool = True
-    user_correction: Optional[str] = None
+    @classmethod
+    def from_dict(cls, data: Dict) -> "Message":
+        return cls(**data)
 
 
 @dataclass
 class Session:
-    """Complete session data"""
-
-    session_id: str
-    session_type: SessionType
-    state: SessionState
-    created_at: datetime
-    last_activity: datetime
-    ended_at: Optional[datetime] = None
-
-    # Content
-    turns: List[InteractionTurn] = field(default_factory=list)
-    context: Dict[str, Any] = field(default_factory=dict)
+    id: str
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    messages: List[Message] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    # Statistics
-    total_turns: int = 0
-    successful_turns: int = 0
-    total_tokens: int = 0
-    avg_response_time_ms: float = 0.0
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "messages": [m.to_dict() for m in self.messages],
+            "metadata": self.metadata,
+        }
 
-    # User info
-    user_id: Optional[str] = None
-    channel: Optional[str] = None
+    @classmethod
+    def from_dict(cls, data: Dict) -> "Session":
+        messages = [Message.from_dict(m) for m in data.get("messages", [])]
+        return cls(
+            id=data["id"],
+            created_at=data.get("created_at", datetime.utcnow().isoformat()),
+            updated_at=data.get("updated_at", datetime.utcnow().isoformat()),
+            messages=messages,
+            metadata=data.get("metadata", {}),
+        )
+
+
+class EncryptedStorage:
+    """AES-256 encrypted session storage"""
+
+    def __init__(self, path: str, key: bytes):
+        self.path = Path(path)
+        self.path.mkdir(parents=True, exist_ok=True)
+
+        if not CRYPTO_AVAILABLE:
+            self._fernet = None
+            logger.warning("Encryption disabled - cryptography package not installed")
+        else:
+            self._fernet = self._derive_fernet_key(key)
+
+        self._lock = asyncio.Lock()
+
+    def _derive_fernet_key(self, key: bytes) -> "Fernet":
+        if not CRYPTO_AVAILABLE:
+            return None
+
+        salt = b"AURA_SESSION_SALT_v1"
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+            backend=default_backend(),
+        )
+        derived_key = b64encode(kdf.derive(key))
+        return Fernet(derived_key)
+
+    def _get_file_path(self, key: str) -> Path:
+        safe_key = hashlib.sha256(key.encode()).hexdigest()
+        return self.path / f"{safe_key}.enc"
+
+    async def save(self, key: str, data: Dict):
+        """Save encrypted data"""
+        async with self._lock:
+            file_path = self._get_file_path(key)
+            json_data = json.dumps(data)
+
+            if self._fernet:
+                encrypted = self._fernet.encrypt(json_data.encode())
+            else:
+                encrypted = b64encode(json_data.encode())
+
+            with open(file_path, "wb") as f:
+                f.write(encrypted)
+
+    async def load(self, key: str) -> Optional[Dict]:
+        """Load and decrypt data"""
+        async with self._lock:
+            file_path = self._get_file_path(key)
+
+            if not file_path.exists():
+                return None
+
+            try:
+                with open(file_path, "rb") as f:
+                    encrypted = f.read()
+
+                if self._fernet:
+                    decrypted = self._fernet.decrypt(encrypted)
+                else:
+                    decrypted = b64decode(encrypted)
+
+                return json.loads(decrypted.decode())
+            except Exception as e:
+                logger.error(f"Failed to load session {key}: {e}")
+                return None
+
+    async def delete(self, key: str):
+        """Delete stored data"""
+        async with self._lock:
+            file_path = self._get_file_path(key)
+            if file_path.exists():
+                file_path.unlink()
+
+    async def list_keys(self) -> List[str]:
+        """List all stored keys"""
+        keys = []
+        async with self._lock:
+            for file_path in self.path.glob("*.enc"):
+                keys.append(file_path.stem)
+        return keys
+
+    async def clear_all(self):
+        """Clear all stored data"""
+        async with self._lock:
+            for file_path in self.path.glob("*.enc"):
+                file_path.unlink()
 
 
 class SessionManager:
-    """
-    Comprehensive session manager
-    Handles all types of sessions with proper lifecycle management
-    """
+    """Manages conversation sessions with encryption"""
 
-    def __init__(self, session_dir: str = "data/sessions"):
-        self.session_dir = Path(session_dir)
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-
-        self._salt_file = self.session_dir / ".salt"
-        self._sessions: Dict[str, Session] = {}
-        self._active_session_id: Optional[str] = None
-
-        # Session configuration
-        self._config = SessionConfig()
-
-        # Session history for quick access
-        self._recent_sessions: deque = deque(maxlen=50)
-
-        self._load_or_generate_salt()
-        self._load_recent_sessions()
-
-    def _load_or_generate_salt(self) -> None:
-        """Load existing salt or generate a new random one"""
-        if self._salt_file.exists():
-            try:
-                with open(self._salt_file, "rb") as f:
-                    self._salt = base64.b64decode(f.read())
-                logger.info("Loaded existing session salt")
-            except Exception as e:
-                logger.warning(f"Failed to load salt, generating new: {e}")
-                self._generate_new_salt()
-        else:
-            self._generate_new_salt()
-
-    def _generate_new_salt(self) -> None:
-        """Generate a new random salt for encryption"""
-        self._salt = os.urandom(32)
-        try:
-            with open(self._salt_file, "wb") as f:
-                f.write(base64.b64encode(self._salt))
-            os.chmod(self._salt_file, 0o600)
-            logger.info("Generated new session salt")
-        except Exception as e:
-            logger.error(f"Failed to save salt: {e}")
-
-    def _load_recent_sessions(self):
-        """Load recent sessions metadata"""
-        path = self.session_dir / "recent_sessions.json"
-        if path.exists():
-            try:
-                with open(path) as f:
-                    data = json.load(f)
-                    for s in data.get("sessions", []):
-                        self._recent_sessions.append(s)
-            except Exception as e:
-                logger.warning(f"Failed to load recent sessions: {e}")
-
-    def _save_recent_sessions(self):
-        """Save recent sessions metadata"""
-        path = self.session_dir / "recent_sessions.json"
-        try:
-            with open(path, "w") as f:
-                json.dump({"sessions": list(self._recent_sessions)}, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save recent sessions: {e}")
-
-    def get_salt(self) -> bytes:
-        """Get the current encryption salt"""
-        return self._salt
-
-    def create_session(
+    def __init__(
         self,
-        session_type: SessionType = SessionType.INTERACTION,
-        user_id: str = None,
-        channel: str = None,
-        initial_context: Dict = None,
-    ) -> str:
-        """Create a new session"""
-        session_id = self._generate_session_id()
+        storage_path: str,
+        encryption_key: bytes = None,
+        encryption: bool = True,
+        max_history: int = 100,
+    ):
+        self.storage_path = storage_path
+        self.encryption_enabled = encryption
+        self._max_history = max_history
 
-        session = Session(
-            session_id=session_id,
-            session_type=session_type,
-            state=SessionState.ACTIVE,
-            created_at=datetime.now(),
-            last_activity=datetime.now(),
-            user_id=user_id,
-            channel=channel,
-            context=initial_context or {},
-        )
+        if encryption_key is None and encryption:
+            encryption_key = self._generate_key()
+        elif encryption_key is None:
+            encryption_key = b"dummy"  # Placeholder when encryption disabled
 
+        self._storage = EncryptedStorage(storage_path, encryption_key)
+        self._sessions: Dict[str, Session] = {}
+        self._active_session: Optional[str] = None
+        self._session_ttl = timedelta(days=30)
+
+    async def initialize(self):
+        """Initialize session manager"""
+        # Ensure storage directory exists
+        Path(self.storage_path).mkdir(parents=True, exist_ok=True)
+        # Load persisted sessions
+        persisted = await self._storage.list_keys()
+        for session_id in persisted[:10]:  # Load last 10
+            await self.load_session(session_id)
+
+    async def save_all(self):
+        """Save all active sessions"""
+        for session_id in list(self._sessions.keys()):
+            await self.persist_session(session_id)
+
+    def _generate_key(self) -> bytes:
+        key_file = Path(self.storage_path) / ".key"
+
+        if key_file.exists():
+            with open(key_file, "rb") as f:
+                return f.read()
+
+        key = os.urandom(32)
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(key_file, "wb") as f:
+            f.write(key)
+
+        return key
+
+    def create_session(self) -> str:
+        """Create new session, return session_id"""
+        session_id = str(uuid.uuid4())
+        session = Session(id=session_id)
         self._sessions[session_id] = session
-        self._active_session_id = session_id
-
-        # Update recent sessions
-        self._recent_sessions.append(
-            {
-                "session_id": session_id,
-                "session_type": session_type.value,
-                "created_at": session.created_at.isoformat(),
-                "last_activity": session.last_activity.isoformat(),
-            }
-        )
-        self._save_recent_sessions()
-
-        # Save to disk
-        self._save_session(session)
-
-        logger.info(f"Created session: {session_id} ({session_type.value})")
+        self._active_session = session_id
         return session_id
 
-    def _generate_session_id(self) -> str:
-        """Generate unique session ID"""
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        random = secrets.token_hex(4)
-        return f"sess_{timestamp}_{random}"
-
-    def get_session(self, session_id: str = None) -> Optional[Session]:
-        """Get session by ID"""
-        if session_id is None:
-            session_id = self._active_session_id
-
-        if session_id not in self._sessions:
-            if not self._load_session(session_id):
-                return None
-
+    def get_session(self, session_id: str) -> Optional[Dict]:
+        """Get session data"""
         if session_id in self._sessions:
-            session = self._sessions[session_id]
-            session.last_activity = datetime.now()
-            return session
-
+            return self._sessions[session_id].to_dict()
         return None
 
-    def add_turn(
-        self,
-        user_input: str,
-        aura_response: str,
-        context: Dict = None,
-        processing_time_ms: int = 0,
-        tokens_used: int = 0,
-        success: bool = True,
-        user_correction: str = None,
-    ) -> Optional[str]:
-        """Add an interaction turn to the current session"""
-        session = self.get_session()
-        if not session:
-            logger.warning("No active session to add turn")
-            return None
+    async def load_session(self, session_id: str) -> Optional[Dict]:
+        """Load session from storage"""
+        data = await self._storage.load(session_id)
+        if data:
+            session = Session.from_dict(data)
+            self._sessions[session_id] = session
+            return session.to_dict()
+        return None
 
-        turn = InteractionTurn(
-            turn_id=secrets.token_hex(8),
-            timestamp=datetime.now(),
-            user_input=user_input,
-            aura_response=aura_response,
-            context=context or {},
-            processing_time_ms=processing_time_ms,
-            tokens_used=tokens_used,
-            success=success,
-            user_correction=user_correction,
+    def add_message(
+        self, session_id: str, role: str, content: str, metadata: Dict = None
+    ):
+        """Add message to session"""
+        if session_id not in self._sessions:
+            raise ValueError(f"Session {session_id} not found")
+
+        message = Message(
+            role=role,
+            content=content,
+            metadata=metadata or {},
         )
 
-        session.turns.append(turn)
-        session.total_turns += 1
-        session.total_tokens += tokens_used
+        session = self._sessions[session_id]
+        session.messages.append(message)
+        session.updated_at = datetime.utcnow().isoformat()
 
-        if success:
-            session.successful_turns += 1
+        if len(session.messages) > self._max_history:
+            session.messages = session.messages[-self._max_history :]
 
-        # Update average response time
-        if session.total_turns > 1:
-            session.avg_response_time_ms = (
-                session.avg_response_time_ms * (session.total_turns - 1)
-                + processing_time_ms
-            ) / session.total_turns
+    def get_history(self, session_id: str, limit: int = 20) -> List[Dict]:
+        """Get conversation history"""
+        if session_id not in self._sessions:
+            return []
+
+        session = self._sessions[session_id]
+        messages = session.messages[-limit:]
+        return [m.to_dict() for m in messages]
+
+    def clear_session(self, session_id: str):
+        """Clear session data"""
+        if session_id in self._sessions:
+            self._sessions[session_id].messages.clear()
+            self._sessions[session_id].updated_at = datetime.utcnow().isoformat()
+
+    def delete_session(self, session_id: str):
+        """Delete session completely"""
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+
+        if self._active_session == session_id:
+            self._active_session = None
+
+    async def persist_session(self, session_id: str):
+        """Save session to encrypted storage"""
+        if session_id not in self._sessions:
+            raise ValueError(f"Session {session_id} not found")
+
+        session = self._sessions[session_id]
+        await self._storage.save(session_id, session.to_dict())
+
+    async def delete_persisted_session(self, session_id: str):
+        """Delete session from storage"""
+        await self._storage.delete(session_id)
+
+    def list_sessions(self) -> List[str]:
+        """List all session IDs in memory"""
+        return list(self._sessions.keys())
+
+    async def list_persisted_sessions(self) -> List[str]:
+        """List all persisted session IDs"""
+        return await self._storage.list_keys()
+
+    def encrypt_data(self, data: str) -> bytes:
+        """Encrypt sensitive data"""
+        if self._storage._fernet:
+            return self._storage._fernet.encrypt(data.encode())
+        return b64encode(data.encode())
+
+    def decrypt_data(self, encrypted: bytes) -> str:
+        """Decrypt data"""
+        if self._storage._fernet:
+            return self._storage._fernet.decrypt(encrypted).decode()
+        return b64decode(encrypted).decode()
+
+    def export_session(self, session_id: str) -> str:
+        """Export session as JSON"""
+        if session_id not in self._sessions:
+            raise ValueError(f"Session {session_id} not found")
+
+        session = self._sessions[session_id]
+        export_data = {
+            "version": "1.0",
+            "exported_at": datetime.utcnow().isoformat(),
+            "session": session.to_dict(),
+        }
+        return json.dumps(export_data, indent=2)
+
+    def import_session(self, json_data: str) -> str:
+        """Import session from JSON"""
+        data = json.loads(json_data)
+
+        if "session" in data:
+            session_data = data["session"]
         else:
-            session.avg_response_time_ms = processing_time_ms
+            session_data = data
 
-        session.last_activity = datetime.now()
+        session_id = session_data.get("id", str(uuid.uuid4()))
+        session = Session.from_dict(session_data)
 
-        # Trim history if needed
-        if len(session.turns) > self._config.max_history:
-            session.turns = session.turns[-self._config.max_history :]
+        self._sessions[session_id] = session
+        return session_id
 
-        # Auto-save
-        if self._config.auto_save:
-            self._save_session(session)
+    def get_active_session(self) -> Optional[str]:
+        """Get active session ID"""
+        return self._active_session
 
-        return turn.turn_id
+    def set_active_session(self, session_id: str):
+        """Set active session"""
+        if session_id not in self._sessions:
+            raise ValueError(f"Session {session_id} not found")
+        self._active_session = session_id
 
-    def update_context(self, context: Dict):
-        """Update session context"""
-        session = self.get_session()
-        if session:
-            session.context.update(context)
-            session.last_activity = datetime.now()
-            if self._config.auto_save:
-                self._save_session(session)
-
-    def pause_session(self):
-        """Pause current session"""
-        session = self.get_session()
-        if session:
-            session.state = SessionState.IDLE
-            self._save_session(session)
-
-    def resume_session(self):
-        """Resume paused session"""
-        session = self.get_session()
-        if session and session.state == SessionState.IDLE:
-            session.state = SessionState.ACTIVE
-            session.last_activity = datetime.now()
-            self._save_session(session)
-
-    def end_session(self) -> Optional[Dict]:
-        """End current session and return summary"""
-        session = self.get_session()
-        if not session:
+    def get_session_metadata(self, session_id: str, key: str = None) -> Any:
+        """Get session metadata"""
+        if session_id not in self._sessions:
             return None
 
-        session.state = SessionState.ENDED
-        session.ended_at = datetime.now()
+        metadata = self._sessions[session_id].metadata
+        if key:
+            return metadata.get(key)
+        return metadata
 
-        # Calculate session summary
-        summary = {
-            "session_id": session.session_id,
-            "duration_minutes": (session.ended_at - session.created_at).total_seconds()
-            / 60,
-            "total_turns": session.total_turns,
-            "successful_turns": session.successful_turns,
-            "success_rate": session.successful_turns / session.total_turns
-            if session.total_turns > 0
-            else 0,
-            "total_tokens": session.total_tokens,
-            "avg_response_time_ms": session.avg_response_time_ms,
-        }
+    def set_session_metadata(self, session_id: str, key: str, value: Any):
+        """Set session metadata"""
+        if session_id not in self._sessions:
+            raise ValueError(f"Session {session_id} not found")
 
-        self._save_session(session)
+        self._sessions[session_id].metadata[key] = value
+        self._sessions[session_id].updated_at = datetime.utcnow().isoformat()
 
-        # Clear active session
-        self._active_session_id = None
+    def search_messages(self, query: str, session_id: str = None) -> List[Dict]:
+        """Search messages across sessions"""
+        results = []
+        query_lower = query.lower()
 
-        logger.info(f"Ended session {session.session_id}: {summary}")
-        return summary
+        sessions_to_search = [session_id] if session_id else list(self._sessions.keys())
 
-    def set_active_session(self, session_id: str) -> bool:
-        """Set active session"""
-        if session_id in self._sessions or self._load_session(session_id):
-            self._active_session_id = session_id
-            return True
-        return False
-
-    def _save_session(self, session: Session) -> bool:
-        """Save session to disk"""
-        try:
-            session_file = self.session_dir / f"{session.session_id}.json"
-
-            data = {
-                "session_id": session.session_id,
-                "session_type": session.session_type.value,
-                "state": session.state.value,
-                "created_at": session.created_at.isoformat(),
-                "last_activity": session.last_activity.isoformat(),
-                "ended_at": session.ended_at.isoformat() if session.ended_at else None,
-                "context": session.context,
-                "metadata": session.metadata,
-                "total_turns": session.total_turns,
-                "successful_turns": session.successful_turns,
-                "total_tokens": session.total_tokens,
-                "avg_response_time_ms": session.avg_response_time_ms,
-                "user_id": session.user_id,
-                "channel": session.channel,
-                "turns": [
-                    {
-                        "turn_id": t.turn_id,
-                        "timestamp": t.timestamp.isoformat(),
-                        "user_input": t.user_input,
-                        "aura_response": t.aura_response,
-                        "context": t.context,
-                        "processing_time_ms": t.processing_time_ms,
-                        "tokens_used": t.tokens_used,
-                        "success": t.success,
-                        "user_correction": t.user_correction,
-                    }
-                    for t in session.turns
-                ],
-            }
-
-            with open(session_file, "w") as f:
-                json.dump(data, f, indent=2)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save session: {e}")
-            return False
-
-    def _load_session(self, session_id: str) -> bool:
-        """Load session from disk"""
-        try:
-            session_file = self.session_dir / f"{session_id}.json"
-            if not session_file.exists():
-                return False
-
-            with open(session_file, "r") as f:
-                data = json.load(f)
-
-            session = Session(
-                session_id=data["session_id"],
-                session_type=SessionType(data["session_type"]),
-                state=SessionState(data["state"]),
-                created_at=datetime.fromisoformat(data["created_at"]),
-                last_activity=datetime.fromisoformat(data["last_activity"]),
-                ended_at=datetime.fromisoformat(data["ended_at"])
-                if data.get("ended_at")
-                else None,
-                context=data.get("context", {}),
-                metadata=data.get("metadata", {}),
-                total_turns=data.get("total_turns", 0),
-                successful_turns=data.get("successful_turns", 0),
-                total_tokens=data.get("total_tokens", 0),
-                avg_response_time_ms=data.get("avg_response_time_ms", 0.0),
-                user_id=data.get("user_id"),
-                channel=data.get("channel"),
-            )
-
-            # Load turns
-            for t_data in data.get("turns", []):
-                turn = InteractionTurn(
-                    turn_id=t_data["turn_id"],
-                    timestamp=datetime.fromisoformat(t_data["timestamp"]),
-                    user_input=t_data["user_input"],
-                    aura_response=t_data["aura_response"],
-                    context=t_data.get("context", {}),
-                    processing_time_ms=t_data.get("processing_time_ms", 0),
-                    tokens_used=t_data.get("tokens_used", 0),
-                    success=t_data.get("success", True),
-                    user_correction=t_data.get("user_correction"),
-                )
-                session.turns.append(turn)
-
-            self._sessions[session_id] = session
-            return True
-
-        except Exception as e:
-            logger.warning(f"Failed to load session {session_id}: {e}")
-            return False
-
-    def cleanup_expired_sessions(self, max_age_days: int = 30) -> int:
-        """Remove sessions older than max_age_days"""
-        removed = 0
-        try:
-            for session_file in self.session_dir.glob("sess_*.json"):
-                try:
-                    mtime = datetime.fromtimestamp(session_file.stat().st_mtime)
-                    if datetime.now() - mtime > timedelta(days=max_age_days):
-                        session_file.unlink()
-                        removed += 1
-                except Exception:
-                    continue
-        except Exception as e:
-            logger.error(f"Cleanup error: {e}")
-        return removed
-
-    def get_session_history(
-        self, session_type: SessionType = None, user_id: str = None, limit: int = 10
-    ) -> List[Dict]:
-        """Get session history"""
-        sessions = []
-
-        for session_id in list(self._recent_sessions):
-            # Load session metadata
-            if session_id not in self._sessions:
-                if not self._load_session(session_id):
-                    continue
-
-            session = self._sessions.get(session_id)
-            if not session:
+        for sid in sessions_to_search:
+            if sid not in self._sessions:
                 continue
 
-            # Filter
-            if session_type and session.session_type != session_type:
-                continue
-            if user_id and session.user_id != user_id:
-                continue
+            session = self._sessions[sid]
+            for message in session.messages:
+                if query_lower in message.content.lower():
+                    results.append(
+                        {
+                            "session_id": sid,
+                            "message": message.to_dict(),
+                        }
+                    )
 
-            sessions.append(
-                {
-                    "session_id": session.session_id,
-                    "session_type": session.session_type.value,
-                    "created_at": session.created_at.isoformat(),
-                    "last_activity": session.last_activity.isoformat(),
-                    "total_turns": session.total_turns,
-                    "successful_turns": session.successful_turns,
-                    "state": session.state.value,
-                }
-            )
+        return results
 
-            if len(sessions) >= limit:
-                break
+    def cleanup_expired_sessions(self) -> int:
+        """Remove expired sessions from memory"""
+        expired = []
+        now = datetime.utcnow()
 
-        return sessions
+        for session_id, session in self._sessions.items():
+            updated = datetime.fromisoformat(session.updated_at)
+            if now - updated > self._session_ttl:
+                expired.append(session_id)
 
-    def get_active_session_id(self) -> Optional[str]:
-        """Get current active session ID"""
-        return self._active_session_id
+        for session_id in expired:
+            del self._sessions[session_id]
 
-    def get_stats(self) -> Dict[str, Any]:
+        return len(expired)
+
+    def get_stats(self) -> Dict:
         """Get session statistics"""
+        total_messages = 0
+        for session in self._sessions.values():
+            total_messages += len(session.messages)
+
         return {
-            "total_sessions": len(self._recent_sessions),
-            "active_session": self._active_session_id,
-            "loaded_sessions": len(self._sessions),
+            "total_sessions": len(self._sessions),
+            "total_messages": total_messages,
+            "active_session": self._active_session,
+            "encryption_enabled": self._storage._fernet is not None,
         }
 
 
-# Global instance
-_session_manager: Optional[SessionManager] = None
+class AsyncSessionManager(SessionManager):
+    """Async wrapper for session manager"""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lock = asyncio.Lock()
 
-def get_session_manager() -> SessionManager:
-    """Get or create session manager"""
-    global _session_manager
-    if _session_manager is None:
-        _session_manager = SessionManager()
-    return _session_manager
+    async def create_session_async(self) -> str:
+        async with self._lock:
+            return self.create_session()
+
+    async def add_message_async(
+        self, session_id: str, role: str, content: str, metadata: Dict = None
+    ):
+        async with self._lock:
+            self.add_message(session_id, role, content, metadata)
+
+    async def get_history_async(self, session_id: str, limit: int = 20) -> List[Dict]:
+        async with self._lock:
+            return self.get_history(session_id, limit)
+
+    async def clear_session_async(self, session_id: str):
+        async with self._lock:
+            self.clear_session(session_id)
+
+    async def export_session_async(self, session_id: str) -> str:
+        async with self._lock:
+            return self.export_session(session_id)
+
+    async def import_session_async(self, json_data: str) -> str:
+        async with self._lock:
+            return self.import_session(json_data)

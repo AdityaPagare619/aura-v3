@@ -1,29 +1,14 @@
 """
-AURA v3 Channels Package
+AURA Channels Module
+
+Provides communication channels for AURA (Voice, Telegram, API).
 """
 
-from src.channels.communication import (
-    CommunicationManager,
-    create_communication_manager,
-    ChannelType,
-    ChannelStatus,
-    ChannelConfig,
-    IncomingMessage,
-    OutgoingMessage,
-    TelegramChannel,
-    WhatsAppChannel,
-    TermuxChannel,
-)
+from .voice import VoiceChannel, TTSEngine, EspeakTTS, Pyttsx3TTS
 
 __all__ = [
-    "CommunicationManager",
-    "create_communication_manager",
-    "ChannelType",
-    "ChannelStatus",
-    "ChannelConfig",
-    "IncomingMessage",
-    "OutgoingMessage",
-    "TelegramChannel",
-    "WhatsAppChannel",
-    "TermuxChannel",
+    "VoiceChannel",
+    "TTSEngine",
+    "EspeakTTS",
+    "Pyttsx3TTS",
 ]

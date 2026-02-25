@@ -30,8 +30,6 @@ class ToolDefinition:
     risk_level: str = "low"  # low, medium, high, critical
     requires_approval: bool = False
     handler: Optional[Callable] = None
-    privacy_tier: str = "public"  # public, sensitive, private
-    privacy_category: str = "general"  # Maps to privacy category
 
 
 class ToolRegistry:
@@ -43,27 +41,117 @@ class ToolRegistry:
 
     def __init__(self):
         self.tools: Dict[str, ToolDefinition] = {}
-        self._handlers: Dict[str, Callable] = {}  # FIX: Store handlers separately
         self._register_core_tools()
 
     def _register_core_tools(self):
-        """Register core tools"""
+        """Register the core toolset with JSON schemas"""
+
+        # ==================== COMMUNICATION TOOLS ====================
+
+        self.register(
+            ToolDefinition(
+                name="send_whatsapp_message",
+                description="Send a WhatsApp message to a contact",
+                category="communication",
+                risk_level="medium",
+                requires_approval=True,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "contact": {
+                            "type": "string",
+                            "description": "Name or phone number of the contact",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Message text to send",
+                        },
+                    },
+                    "required": ["contact", "message"],
+                },
+                examples=[
+                    {"contact": "Papa", "message": "On my way!"},
+                    {"contact": "+1234567890", "message": "Meeting at 3pm"},
+                ],
+            )
+        )
+
+        self.register(
+            ToolDefinition(
+                name="make_phone_call",
+                description="Make a phone call to a contact",
+                category="communication",
+                risk_level="high",
+                requires_approval=True,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "contact": {
+                            "type": "string",
+                            "description": "Name or phone number to call",
+                        },
+                        "delay_seconds": {
+                            "type": "integer",
+                            "description": "Optional delay before calling (learned from patterns)",
+                            "minimum": 0,
+                            "maximum": 60,
+                            "default": 0,
+                        },
+                    },
+                    "required": ["contact"],
+                },
+                examples=[
+                    {"contact": "Papa"},
+                    {"contact": "Emergency", "delay_seconds": 5},
+                ],
+            )
+        )
+
+        self.register(
+            ToolDefinition(
+                name="send_sms",
+                description="Send an SMS message",
+                category="communication",
+                risk_level="medium",
+                requires_approval=True,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "phone_number": {
+                            "type": "string",
+                            "description": "Phone number to send SMS to",
+                        },
+                        "message": {"type": "string", "description": "Message text"},
+                    },
+                    "required": ["phone_number", "message"],
+                },
+                examples=[{"phone_number": "+1234567890", "message": "Running late!"}],
+            )
+        )
+
+        # ==================== APP CONTROL TOOLS ====================
+
         self.register(
             ToolDefinition(
                 name="open_app",
                 description="Open an application on the device",
+                category="app_control",
+                risk_level="low",
                 parameters={
                     "type": "object",
                     "properties": {
                         "app_name": {
                             "type": "string",
-                            "description": "Name of the app to open",
-                        }
+                            "description": "Name of the app to open (e.g., whatsapp, phone, messages, camera)",
+                        },
+                        "app_package": {
+                            "type": "string",
+                            "description": "Optional package name if name is ambiguous",
+                        },
                     },
                     "required": ["app_name"],
                 },
-                category="android",
-                risk_level="medium",
+                examples=[{"app_name": "whatsapp"}, {"app_name": "camera"}],
             )
         )
 
@@ -71,6 +159,8 @@ class ToolRegistry:
             ToolDefinition(
                 name="close_app",
                 description="Close an application",
+                category="app_control",
+                risk_level="low",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -81,95 +171,211 @@ class ToolRegistry:
                     },
                     "required": ["app_name"],
                 },
-                category="android",
-                risk_level="medium",
+                examples=[{"app_name": "whatsapp"}],
             )
         )
 
         self.register(
             ToolDefinition(
-                name="tap_screen",
-                description="Tap a specific position on screen",
+                name="explore_app",
+                description="Explore an app's interface - click, scroll, read (MEMORIZED for future)",
+                category="app_control",
+                risk_level="low",
                 parameters={
                     "type": "object",
                     "properties": {
-                        "x": {"type": "number", "description": "X coordinate"},
-                        "y": {"type": "number", "description": "Y coordinate"},
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "click",
+                                "scroll_up",
+                                "scroll_down",
+                                "get_text",
+                                "screenshot",
+                            ],
+                            "description": "Action to perform",
+                        },
+                        "target": {
+                            "type": "string",
+                            "description": "Description of target (e.g., 'send button', 'menu', 'search field')",
+                        },
+                        "coordinates": {
+                            "type": "object",
+                            "description": "Optional specific coordinates",
+                            "properties": {
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                            },
+                        },
+                        "text_input": {
+                            "type": "string",
+                            "description": "Text to type (for text input action)",
+                        },
+                    },
+                    "required": ["action"],
+                },
+                examples=[
+                    {"action": "click", "target": "send button"},
+                    {"action": "scroll_down"},
+                    {"action": "get_text", "target": "message content"},
+                ],
+            )
+        )
+
+        # ==================== SCREEN INTERACTION ====================
+
+        self.register(
+            ToolDefinition(
+                name="tap_screen",
+                description="Tap at specific screen coordinates",
+                category="screen",
+                risk_level="low",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "integer", "description": "X coordinate"},
+                        "y": {"type": "integer", "description": "Y coordinate"},
                     },
                     "required": ["x", "y"],
                 },
-                category="android",
-                risk_level="medium",
+                examples=[{"x": 500, "y": 1000}],
             )
         )
 
         self.register(
             ToolDefinition(
                 name="swipe_screen",
-                description="Swipe on screen in a direction",
+                description="Swipe on screen",
+                category="screen",
+                risk_level="low",
                 parameters={
                     "type": "object",
                     "properties": {
                         "direction": {
                             "type": "string",
                             "enum": ["up", "down", "left", "right"],
-                            "description": "Direction to swipe",
+                            "description": "Swipe direction",
                         },
                         "distance": {
-                            "type": "number",
+                            "type": "integer",
                             "description": "Distance in pixels",
+                            "default": 500,
+                        },
+                        "duration": {
+                            "type": "integer",
+                            "description": "Duration in milliseconds",
+                            "default": 300,
                         },
                     },
                     "required": ["direction"],
                 },
-                category="android",
-                risk_level="medium",
+                examples=[{"direction": "up"}, {"direction": "left", "distance": 800}],
             )
         )
 
         self.register(
             ToolDefinition(
                 name="type_text",
-                description="Type text into the current input field",
+                description="Type text on screen (into focused field)",
+                category="screen",
+                risk_level="low",
                 parameters={
                     "type": "object",
                     "properties": {
-                        "text": {"type": "string", "description": "Text to type"}
+                        "text": {"type": "string", "description": "Text to type"},
+                        "enter_key": {
+                            "type": "boolean",
+                            "description": "Press enter after typing",
+                            "default": False,
+                        },
                     },
                     "required": ["text"],
                 },
-                category="android",
-                risk_level="medium",
+                examples=[
+                    {"text": "Hello there!"},
+                    {"text": "Search query", "enter_key": True},
+                ],
             )
         )
 
         self.register(
             ToolDefinition(
-                name="get_current_app",
-                description="Get the currently active application",
-                parameters={"type": "object", "properties": {}},
-                category="android",
+                name="press_key",
+                description="Press a hardware/system key",
+                category="screen",
                 risk_level="low",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "enum": [
+                                "back",
+                                "home",
+                                "recent",
+                                "volume_up",
+                                "volume_down",
+                                "power",
+                            ],
+                            "description": "Key to press",
+                        }
+                    },
+                    "required": ["key"],
+                },
+                examples=[{"key": "back"}, {"key": "home"}],
+            )
+        )
+
+        # ==================== INFORMATION TOOLS ====================
+
+        self.register(
+            ToolDefinition(
+                name="get_current_app",
+                description="Get information about currently open app",
+                category="information",
+                risk_level="low",
+                parameters={"type": "object", "properties": {}},
+                examples=[],
             )
         )
 
         self.register(
             ToolDefinition(
                 name="take_screenshot",
-                description="Take a screenshot",
+                description="Take a screenshot of current screen",
+                category="information",
+                risk_level="low",
                 parameters={
                     "type": "object",
                     "properties": {
                         "save_path": {
                             "type": "string",
-                            "description": "Path to save screenshot",
+                            "description": "Optional path to save screenshot",
                         }
                     },
                 },
-                category="android",
+                examples=[{}],
+            )
+        )
+
+        self.register(
+            ToolDefinition(
+                name="read_screen",
+                description="Read text visible on screen using OCR",
+                category="information",
                 risk_level="low",
-                privacy_tier="private",
-                privacy_category="screenshots",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "region": {
+                            "type": "string",
+                            "enum": ["all", "top", "bottom", "center"],
+                            "description": "Region to read",
+                            "default": "all",
+                        }
+                    },
+                },
+                examples=[{}, {"region": "top"}],
             )
         )
 
@@ -177,85 +383,131 @@ class ToolRegistry:
             ToolDefinition(
                 name="get_notifications",
                 description="Get recent notifications",
+                category="information",
+                risk_level="low",
                 parameters={
                     "type": "object",
                     "properties": {
                         "limit": {
-                            "type": "number",
-                            "description": "Max notifications to return",
+                            "type": "integer",
+                            "description": "Number of notifications to fetch",
+                            "default": 10,
+                            "maximum": 50,
                         }
                     },
                 },
-                category="android",
-                risk_level="low",
-                privacy_tier="sensitive",
-                privacy_category="messages",
+                examples=[{"limit": 5}],
             )
         )
 
         self.register(
             ToolDefinition(
-                name="send_message",
-                description="Send a message via a messaging app",
+                name="get_contacts",
+                description="Get contacts from phone",
+                category="information",
+                risk_level="medium",
                 parameters={
                     "type": "object",
                     "properties": {
-                        "recipient": {
+                        "search": {
                             "type": "string",
-                            "description": "Message recipient",
+                            "description": "Search term for contact name",
                         },
-                        "message": {"type": "string", "description": "Message text"},
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum contacts to return",
+                            "default": 20,
+                        },
                     },
-                    "required": ["recipient", "message"],
                 },
-                category="communication",
-                risk_level="high",
-                requires_approval=True,
-                privacy_tier="private",
-                privacy_category="messages",
+                examples=[{"search": "Dad"}, {"limit": 10}],
+            )
+        )
+
+        # ==================== UTILITY TOOLS ====================
+
+        self.register(
+            ToolDefinition(
+                name="wait",
+                description="Wait for specified seconds",
+                category="utility",
+                risk_level="low",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "seconds": {
+                            "type": "integer",
+                            "description": "Seconds to wait",
+                            "minimum": 1,
+                            "maximum": 60,
+                        }
+                    },
+                    "required": ["seconds"],
+                },
+                examples=[{"seconds": 5}],
             )
         )
 
         self.register(
             ToolDefinition(
-                name="make_call",
-                description="Make a phone call",
+                name="set_reminder",
+                description="Set a reminder/alarm",
+                category="utility",
+                risk_level="medium",
                 parameters={
                     "type": "object",
                     "properties": {
-                        "number": {
+                        "title": {"type": "string", "description": "Reminder title"},
+                        "time_offset_minutes": {
+                            "type": "integer",
+                            "description": "Minutes from now to trigger",
+                        },
+                        "message": {
                             "type": "string",
-                            "description": "Phone number to call",
-                        }
+                            "description": "Reminder message",
+                        },
                     },
-                    "required": ["number"],
+                    "required": ["title", "time_offset_minutes"],
                 },
-                category="communication",
-                risk_level="critical",
-                requires_approval=True,
+                examples=[
+                    {
+                        "title": "Call back",
+                        "time_offset_minutes": 30,
+                        "message": "Call Papa back",
+                    }
+                ],
             )
         )
 
-    def register(self, tool: ToolDefinition, handler: Optional[Callable] = None):
-        """Register a tool with its definition and optional handler"""
-        self.tools[tool.name] = tool
-        if handler:
-            self._handlers[tool.name] = handler
-            tool.handler = handler  # Also set on the definition
-        logger.info(f"Registered tool: {tool.name} ({tool.category})")
+        self.register(
+            ToolDefinition(
+                name="get_time",
+                description="Get current time and date",
+                category="utility",
+                risk_level="low",
+                parameters={"type": "object", "properties": {}},
+                examples=[],
+            )
+        )
 
-    def register_handler(self, name: str, handler: Callable):
-        """Register a handler for an existing tool"""
-        self._handlers[name] = handler
-        if name in self.tools:
-            self.tools[name].handler = handler
-        logger.info(f"Bound handler to tool: {name}")
+        self.register(
+            ToolDefinition(
+                name="get_location",
+                description="Get current location (if available)",
+                category="utility",
+                risk_level="low",
+                parameters={"type": "object", "properties": {}},
+                examples=[],
+            )
+        )
+
+    def register(self, tool: ToolDefinition):
+        """Register a tool with its definition"""
+        self.tools[tool.name] = tool
+        logger.info(f"Registered tool: {tool.name} ({tool.category})")
 
     def get_tool(self, name: str) -> Optional[Callable]:
         """Get tool handler by name"""
-        # FIX: First check _handlers dict, then fall back to tool.handler
-        if name in self._handlers:
-            return self._handlers[name]
         tool = self.tools.get(name)
         return tool.handler if tool else None
 
@@ -420,37 +672,3 @@ class ToolExecutor:
             "avg_duration": avg_duration,
             "tool_stats": tool_stats,
         }
-
-
-def create_android_tool_handlers(android_tools) -> Dict[str, Callable]:
-    """Create handler functions that wrap AndroidTools methods"""
-    return {
-        "open_app": lambda **params: android_tools.open_app(params.get("app_name", "")),
-        "close_app": lambda **params: android_tools.close_app(
-            params.get("app_name", "")
-        ),
-        "tap_screen": lambda **params: android_tools.tap(
-            params.get("x", 0), params.get("y", 0)
-        ),
-        "swipe_screen": lambda **params: android_tools.swipe(
-            params.get("direction", "up"), params.get("distance", 500)
-        ),
-        "type_text": lambda **params: android_tools.type_text(params.get("text", "")),
-        "press_key": lambda **params: android_tools.press_key(
-            params.get("key", "back")
-        ),
-        "get_current_app": lambda **params: android_tools.get_current_app(),
-        "take_screenshot": lambda **params: android_tools.take_screenshot(
-            params.get("save_path", "/sdcard/screenshot.png")
-        ),
-        "get_notifications": lambda **params: android_tools.get_notifications(
-            params.get("limit", 10)
-        ),
-    }
-
-
-def bind_tool_handlers(registry: ToolRegistry, handlers: Dict[str, Callable]):
-    """Bind handlers to tools in the registry"""
-    for name, handler in handlers.items():
-        registry.register_handler(name, handler)
-    logger.info(f"Bound {len(handlers)} tool handlers")

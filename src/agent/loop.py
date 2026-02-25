@@ -1,888 +1,817 @@
 """
-AURA v3 Agent Loop - THE BRAIN
-LLM-powered reasoning loop inspired by ReAct and neural attention
-This is where ALL reasoning happens - the LLM is the brain!
+AURA v3 Core Agent Loop
+Implements ReAct (Reasoning + Acting) pattern with JSON Tool Schemas
+
+Key innovations over v1/v2:
+- Tool schemas passed to LLM (not just text descriptions)
+- Iterative ReAct loop (not one-shot)
+- Tool results fed back to LLM for natural responses
+- Self-awareness: knows its limitations
+- Persistent context across turns
+- SELF-IMPROVEMENT: Reflection, strategy improvement, uncertainty detection, meta-cognition
 """
 
 import asyncio
-import logging
 import json
-import uuid
-from typing import Dict, List, Any, Optional, Callable, Set
+import logging
+import time
+from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
-from collections import deque
+import uuid
 
-from src.llm.manager import LLMManager, get_llm_manager
-from src.memory import NeuralMemory, get_neural_memory, MemoryType
+from src.memory import HierarchicalMemory
+from src.llm import LLMRunner
+from src.tools.registry import ToolRegistry
+from src.context.detector import ContextDetector
+from src.learning.engine import LearningEngine
+from src.security.permissions import PermissionLevel, SecurityLayer
 
 logger = logging.getLogger(__name__)
 
 
 class AgentState(Enum):
-    """States of the agent"""
-
     IDLE = "idle"
-    THINKING = "thinking"  # Reasoning - LLM processing
-    ACTING = "acting"  # Executing tools
-    OBSERVING = "observing"  # Gathering context
+    THINKING = "thinking"
+    ACTING = "acting"
     WAITING_APPROVAL = "waiting_approval"
     WAITING_USER = "waiting_user"
-    COMPLETED = "completed"
     ERROR = "error"
-
-
-class ReasoningStep(Enum):
-    """Steps in ReAct reasoning"""
-
-    OBSERVE = "observe"
-    THINK = "think"
-    ACT = "act"
-    REFLECT = "reflect"
-    FINALIZE = "finalize"
 
 
 @dataclass
 class Thought:
-    """A single thought/reasoning step"""
+    """A single thought/action in the ReAct loop"""
 
-    step: ReasoningStep
-    content: str
-    timestamp: datetime
-    tool_used: Optional[str] = None
-    tool_result: Optional[str] = None
-    confidence: float = 1.0
-
-
-@dataclass
-class AgentContext:
-    """Complete context for agent reasoning"""
-
-    # User input
-    user_message: str
-    conversation_id: str
-
-    # Temporal context
-    time_of_day: str
-    day_of_week: str
-
-    # User state
-    user_busyness: float = 0.0
-    interruption_willingness: float = 0.0
-
-    # Relevant memories
-    relevant_memories: List[Dict] = field(default_factory=list)
-    recent_conversations: List[Dict] = field(default_factory=list)
-
-    # Active patterns
-    active_patterns: List[str] = field(default_factory=list)
-
-    # Pending tasks
-    pending_tasks: List[str] = field(default_factory=list)
-
-    # User profile
-    user_preferences: Dict[str, Any] = field(default_factory=dict)
-    communication_style: str = "balanced"
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    thought: str = ""
+    action: str = ""
+    action_input: Dict[str, Any] = field(default_factory=dict)
+    observation: str = ""
+    timestamp: datetime = field(default_factory=datetime.now)
 
 
 @dataclass
 class AgentResponse:
-    """Response from the agent"""
+    """Final response from the agent"""
 
     message: str
-    state: AgentState
     thoughts: List[Thought] = field(default_factory=list)
-    actions_taken: List[Dict] = field(default_factory=list)
-    context_updates: Dict[str, Any] = field(default_factory=dict)
-    confidence: float = 1.0
-    should_notify: bool = False
-    notification_message: Optional[str] = None
+    actions_executed: List[Dict] = field(default_factory=list)
+    state: AgentState = AgentState.IDLE
+    needs_approval: bool = False
+    approval_type: Optional[str] = None
+    context: Dict[str, Any] = field(default_factory=dict)
 
 
-class AuraAgentLoop:
+class ReActAgent:
     """
-    AURA's BRAIN - LLM-powered reasoning loop
+    Core ReAct Agent Loop - The heart of AURA v3
 
-    This is the core of AURA - where ALL reasoning happens.
-    Inspired by:
-    - ReAct (Reasoning + Acting)
-    - Neural attention mechanisms
-    - Human thought processes
+    Implements the ReAct pattern:
+    Thought → Action → Observation → Thought → ... → Final Response
 
-    The LLM does ALL reasoning - algorithms are just the nervous system!
+    Unlike v1/v2 which was one-shot, this loops until:
+    1. LLM returns no more tools (just a response)
+    2. Max iterations reached
+    3. Error occurs
     """
 
-    def __init__(self, llm_manager: LLMManager = None):
-        self.llm = llm_manager or get_llm_manager()
+    def __init__(
+        self,
+        llm: LLMRunner,
+        tool_registry: ToolRegistry,
+        memory: HierarchicalMemory,
+        context_detector: ContextDetector,
+        learning_engine: LearningEngine,
+        security_layer: SecurityLayer,
+        max_iterations: int = 10,
+        approval_callback: Optional[Callable] = None,
+    ):
+        self.llm = llm
+        self.tools = tool_registry
+        self.memory = memory
+        self.context_detector = context_detector
+        self.learning = learning_engine
+        self.security = security_layer
+        self.max_iterations = max_iterations
+        self.approval_callback = approval_callback
 
-        # Reasoning state
         self.state = AgentState.IDLE
-        self.conversation_id = str(uuid.uuid4())[:8]
-        self.thought_history: deque = deque(maxlen=100)
+        self.current_thoughts: List[Thought] = []
+        self.session_id = str(uuid.uuid4())[:8]
 
-        # Context
-        self.context: Optional[AgentContext] = None
+        self._fallback_strategies = {
+            "get_contacts": ["search_contacts", "list_contacts"],
+            "send_message": ["send_sms", "send_whatsapp"],
+            "make_call": ["make_phone_call", "initiate_voip_call"],
+            "get_weather": ["check_weather", "get_forecast"],
+            "search_web": ["web_search", "search_local"],
+            "get_location": ["get_current_location", "get_gps_coordinates"],
+            "set_reminder": ["create_reminder", "set_alarm"],
+            "open_app": ["launch_app", "start_application"],
+        }
 
-        # Tools (will be registered)
-        self.tools: Dict[str, Callable] = {}
-        self.tool_schemas: List[Dict] = []
+        self._reflection_enabled = True
+        self._meta_cognition_enabled = True
+        self._uncertainty_threshold = 0.5
 
-        # Memory system - CONNECTED to neural memory
-        self.neural_memory = get_neural_memory()
-
-        # NEURAL SYSTEMS (AURA-Native - wired in main.py)
-        self.neural_planner = None
-        self.hebbian_corrector = None
-        self.model_router = None
-
-        # TOOL ORCHESTRATOR (wired in main.py)
-        self.tool_orchestrator = None
-
-        # Settings
-        self.max_thought_steps = 10
-        self.thinking_timeout = 60.0
-
-        # Callbacks
-        self.on_think: Optional[Callable] = None
-        self.on_act: Optional[Callable] = None
-        self.on_complete: Optional[Callable] = None
-
-    # =========================================================================
-    # TOOL REGISTRATION
-    # =========================================================================
-
-    def register_tool(
-        self, name: str, handler: Callable, description: str, parameters: Dict[str, Any]
-    ):
-        """Register a tool for the agent to use"""
-        self.tools[name] = handler
-        self.tool_schemas.append(
-            {"name": name, "description": description, "parameters": parameters}
-        )
-        logger.info(f"Registered tool: {name}")
-
-    def get_tool_schemas(self) -> str:
-        """Get tool schemas as JSON for LLM"""
-        return json.dumps(self.tool_schemas, indent=2)
-
-    # =========================================================================
-    # NEURAL SYSTEMS SETTERS (wired from main.py)
-    # =========================================================================
-
-    def set_neural_systems(self, planner=None, hebbian=None, router=None):
-        """Set neural system references (called from main.py)"""
-        self.neural_planner = planner
-        self.hebbian_corrector = hebbian
-        self.model_router = router
-        logger.info("Neural systems wired to agent")
-
-    def set_tool_orchestrator(self, orchestrator):
-        """Set tool orchestrator for deterministic execution"""
-        self.tool_orchestrator = orchestrator
-        logger.info("Tool orchestrator wired to agent")
-
-    async def _select_model(self, user_context: Dict) -> str:
-        """Use neural-aware router to select best model"""
-        if not self.model_router:
-            return "default"
-
-        try:
-            result = await self.model_router.select_model(
-                task_description=user_context.get("task", "general"),
-                user_context=user_context,
-            )
-            return result.selected_tier.value
-        except Exception as e:
-            logger.warning(f"Model routing failed: {e}")
-            return "default"
-
-    async def _validate_plan(self, user_intent: str, user_context: Dict):
-        """Use neural-validated planner for planning"""
-        if not self.neural_planner:
-            return None
-
-        try:
-            plan, validation = await self.neural_planner.create_plan(
-                user_intent=user_intent,
-                available_tools=self.tool_schemas,
-                user_context=user_context,
-            )
-            return {"plan": plan, "validation": validation}
-        except Exception as e:
-            logger.warning(f"Neural planning failed: {e}")
-            return None
-
-    async def _record_outcome(
-        self, action: str, params: Dict, success: bool, context: Dict
-    ):
-        """Use Hebbian self-corrector to learn from outcomes"""
-        if not self.hebbian_corrector:
-            return
-
-        try:
-            from src.core.hebbian_self_correction import ActionOutcome
-
-            outcome = ActionOutcome.SUCCESS if success else ActionOutcome.FAILURE
-            await self.hebbian_corrector.record_outcome(
-                action=action, params=params, outcome=outcome, context=context
-            )
-        except Exception as e:
-            logger.warning(f"Hebbian learning failed: {e}")
-
-    # =========================================================================
-    # CONTEXT GATHERING (OBSERVE)
-    # =========================================================================
-
-    async def _observe(self, user_message: str) -> AgentContext:
-        """Gather context - observe the situation"""
-        self.state = AgentState.OBSERVING
-
-        # Get temporal context
-        now = datetime.now()
-        time_of_day = self._get_time_period(now)
-        day_of_week = now.strftime("%A")
-
-        # Get user state from adaptive context - use REAL values, not hardcoded!
-        user_busyness, interruption_willingness = await self._get_user_state()
-
-        # Get relevant memories
-        relevant_memories = await self._retrieve_memories(user_message)
-
-        # Get recent conversations
-        recent_conversations = await self._get_recent_conversations()
-
-        # Get active patterns
-        active_patterns = await self._get_active_patterns()
-
-        # Get pending tasks
-        pending_tasks = await self._get_pending_tasks()
-
-        # Get user preferences
-        user_preferences = await self._get_user_preferences()
-
-        context = AgentContext(
-            user_message=user_message,
-            conversation_id=self.conversation_id,
-            time_of_day=time_of_day,
-            day_of_week=day_of_week,
-            user_busyness=user_busyness,
-            interruption_willingness=interruption_willingness,
-            relevant_memories=relevant_memories,
-            recent_conversations=recent_conversations,
-            active_patterns=active_patterns,
-            pending_tasks=pending_tasks,
-            user_preferences=user_preferences,
-        )
-
-        self.context = context
-
-        # Log observation
-        thought = Thought(
-            step=ReasoningStep.OBSERVE,
-            content=f"Observing: User said '{user_message[:50]}...' at {time_of_day}",
-            timestamp=datetime.now(),
-        )
-        self.thought_history.append(thought)
-
-        return context
-
-    def _get_time_period(self, dt: datetime) -> str:
-        """Get time period"""
-        hour = dt.hour
-        if 5 <= hour < 12:
-            return "morning"
-        elif 12 <= hour < 17:
-            return "afternoon"
-        elif 17 <= hour < 21:
-            return "evening"
-        else:
-            return "night"
-
-    async def _retrieve_memories(self, query: str) -> List[Dict]:
-        """Retrieve relevant memories using neural memory"""
-        try:
-            neurons = await self.neural_memory.recall(
-                query=query,
-                memory_types=[MemoryType.EPISODIC, MemoryType.SEMANTIC],
-                limit=5,
-            )
-            return [
-                {
-                    "content": n.content,
-                    "type": n.memory_type.value,
-                    "importance": n.importance,
-                }
-                for n in neurons
-            ]
-        except Exception as e:
-            logger.error(f"Memory retrieval error: {e}")
-            return []
-
-    async def _get_recent_conversations(self) -> List[Dict]:
-        """Get recent conversation history"""
-        try:
-            from src.session import get_session_manager
-
-            session_mgr = get_session_manager()
-            session = session_mgr.get_session()
-            if session:
-                return [
-                    {"role": "user", "content": turn.user_input}
-                    for turn in session.turns[-5:]
-                ]
-        except Exception as e:
-            logger.warning(f"Could not get recent conversations: {e}")
-        return []
-
-    async def _get_active_patterns(self) -> List[str]:
-        """Get active user patterns from adaptive context"""
-        try:
-            from src.services.adaptive_context import AdaptiveContextEngine
-
-            ctx_engine = AdaptiveContextEngine()
-            patterns = await ctx_engine.get_all_patterns()
-            return [p.get("pattern_key", "") for p in patterns[:5]] if patterns else []
-        except Exception as e:
-            logger.warning(f"Could not get active patterns: {e}")
-        return []
-
-    async def _get_pending_tasks(self) -> List[str]:
-        """Get pending tasks from task context"""
-        try:
-            from src.services.task_context import TaskContextPreservation
-
-            task_ctx = TaskContextPreservation()
-            tasks = await task_ctx.get_active_tasks()
-            return [t.task_id for t in tasks[:5]] if tasks else []
-        except Exception as e:
-            logger.warning(f"Could not get pending tasks: {e}")
-        return []
-
-    async def _get_pending_tasks(self) -> List[str]:
-        """Get pending tasks from task context"""
-        try:
-            from src.services.task_context import TaskContextPreservation
-
-            task_ctx = TaskContextPreservation()
-            tasks = await task_ctx.get_pending_tasks()
-            return tasks if tasks else []
-        except Exception as e:
-            logger.warning(f"Could not get pending tasks: {e}")
-        return []
-
-    async def _get_user_preferences(self) -> Dict[str, Any]:
-        """Get user preferences from profile/learning"""
-        try:
-            from src.core.user_profile import get_user_profiler
-
-            profiler = get_user_profiler("default")
-            if profiler:
-                return profiler.get_context()
-        except Exception as e:
-            logger.warning(f"Could not get user preferences: {e}")
-        return {}
-
-    async def _get_user_state(self) -> tuple:
+    async def process(
+        self,
+        user_message: str,
+        session_history: Optional[List[Dict]] = None,
+    ) -> AgentResponse:
         """
-        Get real user state from context provider - NOT hardcoded!
-        Returns: (user_busyness, interruption_willingness)
+        Main entry point: Process user message through ReAct loop
+
+        Args:
+            user_message: The user's input
+            session_history: Previous conversation turns
+
+        Returns:
+            AgentResponse with message, thoughts, and actions
         """
-        try:
-            from src.context import get_context_provider
+        logger.info(f"[{self.session_id}] Processing: {user_message[:50]}...")
 
-            ctx_provider = get_context_provider()
-
-            # Get device context for activity-based busyness estimation
-            device_ctx = await ctx_provider.get_device_context()
-
-            # Estimate busyness based on device state
-            # If screen is on and user is active, they're likely busy
-            user_busyness = 0.5  # default
-            if device_ctx:
-                screen_on = device_ctx.get("screen_on", False)
-                if screen_on:
-                    # Check what app is running to estimate busyness
-                    # For now, default to moderate busyness when screen is on
-                    user_busyness = 0.6
-                else:
-                    user_busyness = 0.3  # Screen off = less busy
-
-                # Check battery level - low battery = user might be busy/away
-                battery = device_ctx.get("battery_level", 100)
-                if battery < 20:
-                    user_busyness = min(user_busyness + 0.1, 1.0)
-
-            # Get user's learned interruption willingness from profile
-            try:
-                from src.core.user_profile import get_user_profiler
-
-                profiler = get_user_profiler("default")
-                if profiler:
-                    profile = profiler.get_context()
-                    # Try to get interruption willingness from learned profile
-                    interruption_willingness = profile.get(
-                        "interruption_tolerance", 0.5
-                    )
-                else:
-                    interruption_willingness = 0.5
-            except:
-                interruption_willingness = 0.5
-
-            return (user_busyness, interruption_willingness)
-
-        except Exception as e:
-            logger.warning(f"Could not get user state from context: {e}")
-            return (0.5, 0.5)  # Safe defaults
-
-    async def _store_interaction(self, context: AgentContext, response_message: str):
-        """
-        Store the interaction in neural memory for learning.
-        This is the CRITICAL feedback loop that enables AURA to learn from interactions.
-        """
-        try:
-            # Determine importance based on context
-            importance = 0.5
-
-            # Higher importance if user mentioned something personal
-            if any(
-                word in context.user_message.lower()
-                for word in ["remember", "don't forget", "important", "always"]
-            ):
-                importance = 0.8
-
-            # Higher importance if there were tool actions
-            has_actions = any(t.tool_used for t in self.thought_history if t.tool_used)
-            if has_actions:
-                importance = 0.7
-
-            # Extract related neuron IDs from retrieval for Hebbian learning
-            related_ids = [
-                m.id for m in context.relevant_memories[:5] if hasattr(m, "id")
-            ]
-
-            # Store the interaction as an episodic memory
-            await self.neural_memory.learn(
-                content=f"User: {context.user_message[:100]} | AURA: {response_message[:100]}",
-                memory_type=MemoryType.EPISODIC,
-                related_to=related_ids if related_ids else None,
-                importance=importance,
-                emotional_valence=0.0,  # Could analyze sentiment
-                tags={context.time_of_day, context.day_of_week},
-            )
-
-            logger.debug(
-                f"Stored interaction in neural memory (importance: {importance})"
-            )
-
-        except Exception as e:
-            logger.warning(f"Failed to store interaction in memory: {e}")
-
-    # =========================================================================
-    # REASONING (THINK) - THE CORE BRAIN
-    # =========================================================================
-
-    async def _think(self, context: AgentContext) -> Thought:
-        """Think - let LLM reason about what to do"""
+        start_time = time.time()
         self.state = AgentState.THINKING
+        self.current_thoughts = []
 
-        # Build prompt for LLM
-        prompt = self._build_reasoning_prompt(context)
+        # Step 1: Detect context (time, location, activity)
+        context = await self.context_detector.detect()
 
-        # Let LLM think
-        try:
-            response = await self.llm.chat(
-                message=prompt,
-                conversation_history=self._get_conversation_history(),
-                system_prompt=self._get_system_prompt(),
+        # Step 2: Get relevant memories
+        relevant_memories = self.memory.retrieve(
+            query=user_message, limit=5, context=context
+        )
+
+        # Step 3: Build system prompt with tool schemas
+        system_prompt = self._build_system_prompt(context, relevant_memories)
+
+        # Step 4: Build conversation with history
+        messages = self._build_messages(
+            user_message=user_message,
+            session_history=session_history or [],
+            system_prompt=system_prompt,
+        )
+
+        # Step 5: ReAct Loop
+        iteration = 0
+        final_message = ""
+        consecutive_failures = 0
+
+        while iteration < self.max_iterations:
+            iteration += 1
+            logger.info(
+                f"[{self.session_id}] ReAct iteration {iteration}/{self.max_iterations}"
             )
 
-            thought_content = response.text
+            # Get LLM response with tool schemas
+            llm_response = await self.llm.generate_with_tools(messages)
 
-        except Exception as e:
-            logger.error(f"LLM thinking error: {e}")
-            thought_content = f"I need to analyze this: {context.user_message}"
+            # Check for uncertainty in LLM response
+            if self._meta_cognition_enabled:
+                confidence = self._detect_uncertainty(llm_response.get("content", ""))
+                if confidence < self._uncertainty_threshold:
+                    logger.info(
+                        f"[{self.session_id}] Low confidence detected: {confidence}"
+                    )
+                    meta_result = await self._meta_cognize(
+                        self.current_thoughts[-3:] if self.current_thoughts else []
+                    )
+                    if meta_result.get("suggestions"):
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": f"Meta-cognition analysis: {meta_result['analysis']}",
+                            }
+                        )
 
-        thought = Thought(
-            step=ReasoningStep.THINK, content=thought_content, timestamp=datetime.now()
+            # Parse response - check if it's a tool call or final response
+            parsed = self._parse_llm_response(llm_response)
+
+            if parsed["type"] == "tool_call":
+                # Tool call detected - execute it
+                thought = Thought(
+                    thought=parsed.get("reasoning", ""),
+                    action=parsed["tool_name"],
+                    action_input=parsed["parameters"],
+                )
+                self.current_thoughts.append(thought)
+
+                # Security check
+                security_check = await self._check_security(
+                    parsed["tool_name"], parsed["parameters"]
+                )
+
+                if not security_check["allowed"]:
+                    thought.observation = f"BLOCKED: {security_check['reason']}"
+                    final_message = f"I can't do that: {security_check['reason']}"
+                    break
+
+                # Approval check for sensitive actions
+                if security_check["needs_approval"]:
+                    self.state = AgentState.WAITING_APPROVAL
+                    return AgentResponse(
+                        message=f"I'm about to {parsed['tool_name']}. Can I proceed?",
+                        thoughts=self.current_thoughts,
+                        actions_executed=[],
+                        state=self.state,
+                        needs_approval=True,
+                        approval_type=parsed["tool_name"],
+                        context=context,
+                    )
+
+                # Execute tool with fallback chain
+                self.state = AgentState.ACTING
+                tool_result = await self._execute_with_fallback(
+                    parsed["tool_name"], parsed["parameters"]
+                )
+
+                thought.observation = json.dumps(tool_result)
+
+                # SELF-REFLECTION: Analyze the result
+                if self._reflection_enabled:
+                    reflection_result = await self._reflect_on_result(
+                        tool_result, thought
+                    )
+                    if reflection_result.get("needs_retry"):
+                        consecutive_failures += 1
+                        logger.info(
+                            f"[{self.session_id}] Action failed, reflection: {reflection_result.get('reflection', '')[:100]}..."
+                        )
+
+                        # If we have a pattern key from reflection, try strategy improvement
+                        pattern_key = reflection_result.get("pattern_key")
+                        if pattern_key:
+                            await self._improve_strategy(pattern_key)
+
+                        # Add reflection to messages for next iteration
+                        if reflection_result.get("reflection"):
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": json.dumps(
+                                        {
+                                            "reflection": reflection_result[
+                                                "reflection"
+                                            ],
+                                            "failed_action": parsed["tool_name"],
+                                            "error": tool_result.get(
+                                                "error", "Unknown"
+                                            ),
+                                        }
+                                    ),
+                                }
+                            )
+                    else:
+                        consecutive_failures = 0
+                else:
+                    consecutive_failures = 0
+
+                # Learn from this interaction
+                await self.learning.record_tool_use(
+                    tool_name=parsed["tool_name"],
+                    parameters=parsed["parameters"],
+                    result=tool_result,
+                    success=tool_result.get("success", False),
+                )
+
+                # Stop after too many consecutive failures
+                if consecutive_failures >= 3:
+                    logger.warning(
+                        f"[{self.session_id}] Too many consecutive failures, stopping"
+                    )
+                    final_message = "I'm having trouble completing this task. Let me know if you'd like to try a different approach."
+                    break
+
+                # Add observation to messages for next iteration
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "action": parsed["tool_name"],
+                                "input": parsed["parameters"],
+                            }
+                        ),
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": json.dumps({"observation": tool_result}),
+                    }
+                )
+
+            elif parsed["type"] == "response":
+                # Final response - no more tools needed
+                final_message = parsed["content"]
+                break
+
+            else:
+                # Couldn't parse - treat as final response
+                final_message = parsed.get("content", "I understand.")
+                break
+
+        # Store interaction in memory
+        await self._store_interaction(user_message, final_message, context)
+
+        elapsed = time.time() - start_time
+        logger.info(
+            f"[{self.session_id}] Completed in {elapsed:.2f}s, {iteration} iterations"
         )
-        self.thought_history.append(thought)
 
-        return thought
+        self.state = AgentState.IDLE
 
-    def _build_reasoning_prompt(self, context: AgentContext) -> str:
-        """Build prompt for reasoning"""
-        prompt = f"""You are AURA, a personal AI assistant. Think step by step about how to help the user.
+        return AgentResponse(
+            message=final_message,
+            thoughts=self.current_thoughts,
+            actions_executed=[t.action for t in self.current_thoughts if t.action],
+            state=self.state,
+            context=context,
+        )
 
-Current situation:
-- User said: "{context.user_message}"
-- Time: {context.time_of_day} on {context.day_of_week}
-- User's current busyness: {context.user_busyness:.0%}
-- User's willingness to be interrupted: {context.interruption_willingness:.0%}
+    def _build_system_prompt(self, context: Dict, memories: List[Dict]) -> str:
+        """Build system prompt with context and memory"""
 
-"""
+        # Get tool schemas in JSON format
+        tool_schemas = self.tools.get_json_schemas()
 
-        # Add relevant memories
-        if context.relevant_memories:
-            prompt += f"Relevant memories:\n"
-            for mem in context.relevant_memories[:3]:
-                prompt += f"- {mem.get('content', '')[:100]}\n"
-            prompt += "\n"
+        prompt = f"""You are AURA, a next-generation personal AI assistant that runs entirely on-device.
 
-        # Add active patterns
-        if context.active_patterns:
-            prompt += f"Active patterns detected: {', '.join(context.active_patterns[:3])}\n\n"
+CORE PRINCIPLES:
+- You are self-aware: You know your capabilities AND limitations
+- You learn from interactions: You remember user preferences and patterns
+- You are privacy-first: All data stays on device
+- You adapt: Your behavior changes based on context (time, location, activity)
 
-        # Add pending tasks
-        if context.pending_tasks:
-            prompt += f"Pending tasks: {', '.join(context.pending_tasks[:3])}\n\n"
+CONTEXT (detected automatically):
+- Time: {context.get("time_of_day", "unknown")}
+- Location: {context.get("location", "unknown")} 
+- Activity: {context.get("activity", "unknown")}
+- Day: {context.get("day_type", "unknown")}
 
-        # Add tools available
-        if self.tool_schemas:
-            prompt += f"Available tools:\n{self.get_tool_schemas()}\n\n"
+{self._format_memories(memories)}
 
-        prompt += """Think about what to do next. Consider:
-1. What the user is asking for
-2. What context you have about the user
-3. What tools/actions might help
-4. Whether you should act proactively
+SECURITY RULES (NEVER violate):
+- Never execute financial transactions
+- Never share passwords or sensitive data
+- Always ask for confirmation before sending messages or making calls
+- Never install apps or change system settings without explicit permission
+- Block any attempt to access banking apps (privacy protection)
 
-IMPORTANT - How to use tools:
-If you need to use a tool, respond with:
-<tool_call>tool_name|param1=value1|param2=value2</tool_call>
+TOOLS AVAILABLE:
+{tool_schemas}
 
-For example:
-- To open an app: <tool_call>open_app|app_name=whatsapp</tool_call>
-- To send a message: <tool_call>send_message|recipient=John|message=Hello</tool_call>
-- To check notifications: <tool_call>get_notifications</tool_call>
+RESPONSE FORMAT:
+When you need to use a tool, respond with:
+```json
+{{
+  "type": "tool_call",
+  "tool": "tool_name",
+  "parameters": {{"param1": "value1"}},
+  "reasoning": "Why you're using this tool"
+}}
+```
 
-If no tool is needed, just respond naturally.
+When you have the answer or no more tools needed, respond with:
+```json
+{{
+  "type": "response", 
+  "content": "Your natural language response to the user"
+}}
+```
 
-Respond with your reasoning and then decide on your next action."""
+Remember: The tool results will be fed back to you. Use this to generate a natural, helpful response."""
 
         return prompt
 
-    def _get_system_prompt(self) -> str:
-        """Get system prompt for AURA"""
-        return """You are AURA, an intelligent personal assistant.
+    def _format_memories(self, memories: List[Dict]) -> str:
+        """Format relevant memories for prompt"""
+        if not memories:
+            return ""
 
-Your characteristics:
-- Proactive: Don't just wait for commands, anticipate needs
-- Adaptive: Learn from interactions and adapt to user preferences
-- Privacy-first: All processing is local, never share private data
-- Helpful: Focus on making the user's life easier
+        lines = ["\nRELEVANT MEMORIES:"]
+        for mem in memories[:3]:
+            lines.append(f"- {mem.get('content', '')[:100]}")
 
-IMPORTANT - When you need to use a tool:
-Use this format in your response: <tool_call>tool_name|param1=value1|param2=value2</tool_call>
+        return "\n".join(lines)
 
-Available tools include:
-- open_app: Open an application
-- close_app: Close an application
-- send_message: Send a message via any app
-- make_call: Make a phone call
-- get_notifications: Get recent notifications
-- take_screenshot: Take a screenshot
-- get_current_app: Get current app info
+    def _build_messages(
+        self, user_message: str, session_history: List[Dict], system_prompt: str
+    ) -> List[Dict]:
+        """Build message list for LLM"""
+        messages = [{"role": "system", "content": system_prompt}]
 
-Example: If user asks "Open WhatsApp", respond:
-I'll open WhatsApp for you.
-<tool_call>open_app|app_name=whatsapp</tool_call>
-
-Communication style:
-- Be conversational but concise
-- Use context to personalize responses
-- When uncertain, ask clarifying questions
-- Don't overwhelm with information"""
-
-    def _get_conversation_history(self) -> List[Dict]:
-        """Get conversation history for context"""
-        history = []
-        for thought in list(self.thought_history)[-10:]:
-            if thought.step == ReasoningStep.THINK:
-                history.append({"role": "assistant", "content": thought.content})
-            elif thought.step == ReasoningStep.ACT and thought.tool_result:
-                history.append(
-                    {"role": "user", "content": f"Tool result: {thought.tool_result}"}
-                )
-        return history
-
-    # =========================================================================
-    # ACTION (ACT)
-    # =========================================================================
-
-    async def _act(self, thought: Thought, context: AgentContext) -> Thought:
-        """Act - execute tools if needed"""
-        self.state = AgentState.ACTING
-
-        # Parse the thought content for tool calls
-        # Format: <tool_call>tool_name|param1=value1|param2=value2</tool_call>
-        tool_result = None
-
-        import re
-
-        tool_match = re.search(
-            r"<tool_call>(.+?)</tool_call>", thought.content, re.IGNORECASE
-        )
-
-        if tool_match:
-            tool_spec = tool_match.group(1)
-            parts = tool_spec.split("|")
-
-            if parts:
-                tool_name = parts[0].strip()
-                params = {}
-
-                for param in parts[1:]:
-                    if "=" in param:
-                        key, value = param.split("=", 1)
-                        params[key.strip()] = value.strip()
-
-                # Execute tool
-                if tool_name in self.tools:
-                    try:
-                        logger.info(
-                            f"Executing tool: {tool_name} with params: {params}"
-                        )
-                        result = await self.tools[tool_name](**params)
-                        tool_result = str(result)
-
-                        # Update history
-                        thought.tool_used = tool_name
-                        thought.tool_result = tool_result[:500]  # Truncate for history
-
-                        logger.info(f"Tool {tool_name} executed successfully")
-                    except Exception as e:
-                        tool_result = f"Error: {str(e)}"
-                        logger.error(f"Tool execution error: {e}")
-                else:
-                    tool_result = f"Tool '{tool_name}' not found"
-        else:
-            # No tool call detected - this is a direct response
-            tool_result = None
-
-        action = Thought(
-            step=ReasoningStep.ACT,
-            content=thought.content,
-            timestamp=datetime.now(),
-            tool_used=tool_match.group(1).split("|")[0] if tool_match else None,
-            tool_result=tool_result,
-        )
-
-        self.thought_history.append(action)
-
-        return action
-
-    # =========================================================================
-    # REFLECTION
-    # =========================================================================
-
-    async def _reflect(self, context: AgentContext) -> Thought:
-        """Reflect on the response and ensure quality"""
-
-        # Get the last action result
-        last_tool_result = None
-        for t in reversed(self.thought_history):
-            if t.tool_result:
-                last_tool_result = t.tool_result
-                break
-
-        # Simple quality checks
-        quality_notes = []
-
-        # Check 1: Was a tool used?
-        if last_tool_result and not last_tool_result.startswith("Error"):
-            quality_notes.append("Tool executed successfully")
-        elif last_tool_result and last_tool_result.startswith("Error"):
-            quality_notes.append(f"Tool error: {last_tool_result[:100]}")
-
-        # Check 2: Response length
-        if context.user_message and len(context.user_message) > 100:
-            quality_notes.append("Complex query handled")
-
-        # Check 3: Context awareness
-        if context.time_of_day:
-            quality_notes.append(f"Time context: {context.time_of_day}")
-
-        thought = Thought(
-            step=ReasoningStep.REFLECT,
-            content=f"Reflection: {'; '.join(quality_notes) if quality_notes else 'Standard response'}",
-            timestamp=datetime.now(),
-        )
-
-        self.thought_history.append(thought)
-
-        return thought
-
-    # =========================================================================
-    # MAIN LOOP
-    # =========================================================================
-
-    async def process(self, user_message: str) -> AgentResponse:
-        """
-        Main processing loop - THE BRAIN IN ACTION
-
-        This is where the magic happens:
-        OBSERVE → THINK → PLAN → ACT → LEARN → RESPOND
-        Now with REAL neural integration!
-        """
-        logger.info(f"Agent processing: {user_message[:50]}...")
-
-        # Step 1: Observe - gather context
-        context = await self._observe(user_message)
-
-        # Step 2: Think - let LLM reason
-        thought = await self._think(context)
-
-        # Step 3: Validate plan using neural-validated planner (NEW!)
-        plan_result = None
-        if self.neural_planner and thought.content:
-            plan_result = await self._validate_plan(
-                user_message, {"thought": thought.content, "context": context.__dict__}
-            )
-            if plan_result:
-                logger.info(
-                    f"Neural plan validated: {plan_result.get('validation', {}).get('result', 'unknown')}"
-                )
-
-        # Step 4: Act - execute if needed
-        action = await self._act(thought, context)
-
-        # Step 5: Record outcome for Hebbian learning (NEW!)
-        if action.tool_used:
-            await self._record_outcome(
-                action=action.tool_used,
-                params={},  # Could track actual params
-                success=action.tool_result is not None
-                and not action.tool_result.startswith("Error"),
-                context={"user_message": user_message, "result": action.tool_result},
+        # Add session history (last 5 turns)
+        for msg in session_history[-5:]:
+            messages.append(
+                {"role": msg.get("role", "user"), "content": msg.get("content", "")}
             )
 
-        # Step 6: Reflect - ensure quality
-        reflection = await self._reflect(context)
+        # Add current message
+        messages.append({"role": "user", "content": user_message})
 
-        # Step 7: Finalize - generate response
-        self.state = AgentState.COMPLETED
+        return messages
 
-        # Generate final response
-        response_message = await self._generate_response(context)
+    def _parse_llm_response(self, response: Dict) -> Dict:
+        """Parse LLM response to determine if tool call or final response"""
 
-        # Create response object
-        response = AgentResponse(
-            message=response_message,
-            state=self.state,
-            thoughts=list(self.thought_history),
-            actions_taken=[{"thought": t.content} for t in self.thought_history],
-            confidence=0.9,
-        )
-
-        # CRITICAL FIX: Store interaction in neural memory for learning
-        await self._store_interaction(context, response_message)
-
-        return response
-
-    async def _generate_response(self, context: AgentContext) -> str:
-        """Generate final response using LLM"""
-
-        # Build context summary
-        context_summary = f"""
-User: {context.user_message}
-Time: {context.time_of_day}, {context.day_of_week}
-Patterns: {", ".join(context.active_patterns[:3]) if context.active_patterns else "None detected"}
-"""
-
-        prompt = f"""Based on the context:
-{context_summary}
-
-Generate a helpful, concise response to the user. Consider:
-- Their current state ({context.user_busyness:.0%} busy)
-- Their communication style preference
-- Whether proactive suggestions would be helpful
-
-Respond naturally as AURA would."""
-
+        # Try to parse as JSON
         try:
-            response = await self.llm.chat(prompt)
-            return response.text
-        except Exception as e:
-            logger.error(f"Response generation error: {e}")
-            return f"I received: {context.user_message}"
+            content = response.get("content", "")
 
-    # =========================================================================
-    # CONTINUOUS MODE (for proactive actions)
-    # =========================================================================
+            # Check for tool call format
+            if '"type": "tool_call"' in content or '"tool":' in content:
+                data = json.loads(content)
+                return {
+                    "type": "tool_call",
+                    "tool_name": data.get("tool", data.get("tool_name", "")),
+                    "parameters": data.get("parameters", data.get("input", {})),
+                    "reasoning": data.get("reasoning", ""),
+                }
 
-    async def run_continuous(self):
-        """Run agent in continuous mode for proactive actions"""
-        logger.info("Starting continuous agent mode")
+            # Check for response format
+            if '"type": "response"' in content:
+                data = json.loads(content)
+                return {"type": "response", "content": data.get("content", content)}
 
-        while True:
-            try:
-                # Check for proactive opportunities
-                should_act, action = await self._check_proactive_opportunities()
+            # Default to response
+            return {"type": "response", "content": content}
 
-                if should_act:
-                    logger.info(f"Proactive action: {action}")
-                    # Execute proactive action
+        except json.JSONDecodeError:
+            return {
+                "type": "response",
+                "content": response.get("content", "I understand."),
+            }
 
-                await asyncio.sleep(60)  # Check every minute
+    async def _check_security(self, tool_name: str, parameters: Dict) -> Dict:
+        """Security check before tool execution"""
 
-            except Exception as e:
-                logger.error(f"Continuous mode error: {e}")
-                await asyncio.sleep(60)
+        # Check if it's a banking app attempt
+        if tool_name == "open_app":
+            app_name = parameters.get("app_name", "").lower()
+            banking_apps = ["bank", "paytm", "phonepe", "gpay", "upi", "banking"]
+            if any(b in app_name for b in banking_apps):
+                return {
+                    "allowed": False,
+                    "needs_approval": False,
+                    "reason": "Access to banking/financial apps is blocked for your privacy and security. You can enable this in settings if needed.",
+                }
 
-    async def _check_proactive_opportunities(self) -> tuple:
-        """Check if there's something proactive to do"""
-        # This would check:
-        # - Upcoming events
-        # - Detected interests
-        # - Pending preparations
-        # - User patterns
+        # Check required permission level
+        required_level = self.security.get_required_level(tool_name)
+        user_level = self.security.get_current_user_level()
 
-        return False, ""
+        if required_level.value > user_level.value:
+            return {
+                "allowed": False,
+                "needs_approval": True,
+                "reason": f"Requires permission level {required_level.name}",
+            }
 
-    # =========================================================================
-    # STATE MANAGEMENT
-    # =========================================================================
-
-    def get_status(self) -> Dict[str, Any]:
-        """Get agent status"""
         return {
-            "state": self.state.value,
-            "conversation_id": self.conversation_id,
-            "thought_steps": len(self.thought_history),
-            "tools_registered": len(self.tools),
-            "context_available": self.context is not None,
+            "allowed": True,
+            "needs_approval": required_level.value >= PermissionLevel.HIGH.value,
+            "reason": "",
         }
 
-    async def reset(self):
-        """Reset agent state for new conversation"""
+    async def _execute_tool(self, tool_name: str, parameters: Dict) -> Dict:
+        """Execute a tool and return result"""
+
+        try:
+            tool = self.tools.get_tool(tool_name)
+            if not tool:
+                return {
+                    "success": False,
+                    "error": f"Tool '{tool_name}' not found",
+                    "available_tools": self.tools.list_tools(),
+                }
+
+            # Execute with timeout
+            result = await asyncio.wait_for(tool(**parameters), timeout=30.0)
+
+            return result
+
+        except asyncio.TimeoutError:
+            logger.error(f"Tool {tool_name} timed out")
+            return {"success": False, "error": "Operation timed out"}
+        except Exception as e:
+            logger.error(f"Tool {tool_name} error: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _execute_with_fallback(self, tool_name: str, params: Dict) -> Dict:
+        """
+        Try primary tool, if fails try alternatives
+        Like human: "If X doesn't work, try Y instead"
+        """
+        fallbacks = self._get_fallbacks(tool_name)
+
+        # Try primary
+        result = await self._execute_tool(tool_name, params)
+
+        if not result.get("success") and fallbacks:
+            # Try each fallback
+            for fallback_tool in fallbacks:
+                logger.info(f"[{self.session_id}] Trying fallback: {fallback_tool}")
+                result = await self._execute_tool(fallback_tool, params)
+                if result.get("success"):
+                    await self.learning.record_fallback_success(
+                        original=tool_name, fallback=fallback_tool
+                    )
+                    result["fallback_used"] = fallback_tool
+                    result["original_tool"] = tool_name
+                    break
+
+        return result
+
+    def _get_fallbacks(self, tool_name: str) -> List[str]:
+        """Get fallback options for a tool"""
+        return self._fallback_strategies.get(tool_name, [])
+
+    async def _reflect_on_result(self, action_result: Dict, thought: Thought) -> Dict:
+        """
+        Reflect on action result - did it succeed or fail?
+        If failed, try alternative approach
+        """
+        success = action_result.get("success", False)
+
+        if not success:
+            error = action_result.get("error", "Unknown")
+            reflection = await self._self_critique(thought, error)
+
+            await self.learning.record_failure(
+                action=thought.action,
+                error=error,
+                context=thought.action_input,
+                reflection=reflection,
+            )
+
+            pattern_key = self._generate_pattern_key(thought)
+            return {
+                "needs_retry": True,
+                "reflection": reflection,
+                "pattern_key": pattern_key,
+            }
+
+        return {"needs_retry": False}
+
+    async def _self_critique(self, thought: Thought, error: str) -> str:
+        """
+        Self-critique: Analyze what went wrong and how to improve
+        Like human: "What could I have done differently?"
+        """
+        critique_prompt = f"""
+You are AURA analyzing a failed action. Provide a brief self-critique.
+
+FAILED ACTION:
+- Tool: {thought.action}
+- Input: {json.dumps(thought.action_input)}
+- Error: {error}
+
+Previous thought: {thought.thought}
+
+Analyze:
+1. Why did this likely fail?
+2. What should I try instead?
+3. What did I learn from this?
+
+Respond with a brief reflection (2-3 sentences).
+"""
+        try:
+            response = await self.llm.generate(
+                [{"role": "user", "content": critique_prompt}]
+            )
+            return response.get("content", "Will try a different approach.")
+        except Exception as e:
+            logger.error(f"Self-critique failed: {e}")
+            return "Will try a different approach."
+
+    def _generate_pattern_key(self, thought: Thought) -> str:
+        """Generate a pattern key for failure tracking"""
+        import hashlib
+
+        key_data = (
+            f"{thought.action}:{json.dumps(thought.action_input, sort_keys=True)}"
+        )
+        return hashlib.md5(key_data.encode()).hexdigest()[:12]
+
+    async def _improve_strategy(self, pattern_key: str):
+        """
+        Analyze past failures and improve approach
+        Like SiriuS: bootstrap reasoning from experience
+        """
+        failures = self.learning.get_failures(pattern_key)
+
+        if len(failures) >= 3:
+            logger.info(
+                f"[{self.session_id}] Improving strategy for pattern {pattern_key}"
+            )
+            analysis = self._analyze_failure_pattern(failures)
+            await self.learning.update_strategy(pattern_key, analysis)
+
+    def _analyze_failure_pattern(self, failures: List[Dict]) -> str:
+        """Analyze common failure points across multiple failures"""
+        if not failures:
+            return "No failure data available"
+
+        errors = [f.get("error", "") for f in failures]
+        error_counts = {}
+        for err in errors:
+            error_counts[err] = error_counts.get(err, 0) + 1
+
+        common_errors = sorted(error_counts.items(), key=lambda x: x[1], reverse=True)[
+            :3
+        ]
+
+        analysis = "Common failure patterns: " + "; ".join(
+            [f"{e}({c}x)" for e, c in common_errors]
+        )
+
+        # Generate improvement suggestion
+        if "not found" in str(common_errors).lower():
+            analysis += (
+                ". Consider trying alternative tools or checking input validity."
+            )
+        elif "timeout" in str(common_errors).lower():
+            analysis += ". Consider adding retry logic or trying a faster alternative."
+        elif "permission" in str(common_errors).lower():
+            analysis += ". Request appropriate permissions or try a different approach."
+
+        return analysis
+
+    def _detect_uncertainty(self, llm_response: str) -> float:
+        """
+        Detect if agent is uncertain about its response
+        Returns confidence score 0-1
+        """
+        uncertain_phrases = [
+            "i'm not sure",
+            "maybe",
+            "possibly",
+            "i don't know",
+            "uncertain",
+            "could be",
+            "i'm not certain",
+            "i cannot be sure",
+            "it's unclear",
+            "might be",
+            "perhaps",
+        ]
+
+        response_lower = llm_response.lower()
+        matches = sum(1 for p in uncertain_phrases if p in response_lower)
+
+        confidence = 1.0 - (matches * 0.15)
+        return max(0.0, min(1.0, confidence))
+
+    async def _meta_cognize(self, thoughts: List[Thought]) -> Dict:
+        """
+        Think about thinking - analyze the thought process
+        Like human: "Am I approaching this correctly?"
+        """
+        if not thoughts:
+            return {"analysis": "No thoughts to analyze", "suggestions": []}
+
+        meta_prompt = f"""
+You are AURA performing meta-cognition. Analyze your recent reasoning to improve approach.
+
+RECENT THOUGHTS:
+{json.dumps([{"thought": t.thought, "action": t.action, "observation": t.observation[:100]} for t in thoughts], indent=2)}
+
+Analyze these questions:
+1. Is the approach correct?
+2. Are we missing anything important?
+3. Should we try a different approach?
+
+Respond with analysis and concrete suggestions if any.
+"""
+        try:
+            response = await self.llm.generate(
+                [{"role": "user", "content": meta_prompt}]
+            )
+            content = response.get("content", "")
+
+            # Extract suggestions (simple heuristic)
+            has_suggestions = any(
+                word in content.lower()
+                for word in ["try", "should", "instead", "alternative", "different"]
+            )
+
+            return {"analysis": content, "suggestions": has_suggestions}
+        except Exception as e:
+            logger.error(f"Meta-cognition failed: {e}")
+            return {"analysis": "", "suggestions": False}
+
+    async def _store_interaction(
+        self, user_message: str, agent_response: str, context: Dict
+    ):
+        """Store the interaction in memory"""
+
+        # Determine importance
+        importance = 0.5
+        if any(
+            w in user_message.lower() for w in ["remember", "don't forget", "important"]
+        ):
+            importance = 0.9
+
+        await self.memory.store(
+            content=f"User: {user_message}\nAura: {agent_response}",
+            importance=importance,
+            metadata={
+                "type": "interaction",
+                "context": context,
+                "session_id": self.session_id,
+            },
+        )
+
+    async def handle_approval(
+        self, approved: bool, details: Optional[Dict] = None
+    ) -> AgentResponse:
+        """Handle user approval response"""
+
+        if not approved:
+            self.state = AgentState.IDLE
+            return AgentResponse(
+                message="Alright, I won't proceed with that action.",
+                thoughts=self.current_thoughts,
+                state=self.state,
+            )
+
+        # Re-execute the pending action
+        if self.current_thoughts:
+            last_thought = self.current_thoughts[-1]
+            if last_thought.action:
+                result = await self._execute_tool(
+                    last_thought.action, last_thought.action_input
+                )
+                last_thought.observation = json.dumps(result)
+
+                # Generate natural response from result
+                messages = [
+                    {
+                        "role": "system",
+                        "content": "Generate a natural response to the user based on the tool result.",
+                    },
+                    {"role": "user", "content": f"Tool result: {json.dumps(result)}"},
+                ]
+
+                response = await self.llm.generate(messages)
+
+                self.state = AgentState.IDLE
+                return AgentResponse(
+                    message=response.get("content", "Done!"),
+                    thoughts=self.current_thoughts,
+                    actions_executed=[last_thought.action],
+                    state=self.state,
+                )
+
         self.state = AgentState.IDLE
-        self.conversation_id = str(uuid.uuid4())[:8]
-        self.thought_history.clear()
-        self.context = None
+        return AgentResponse(
+            message="I'm not sure what action was pending.", state=self.state
+        )
 
 
-# ==============================================================================
-# FACTORY
-# ==============================================================================
+class AgentFactory:
+    """Factory for creating configured agents"""
 
-_agent_instance: Optional[AuraAgentLoop] = None
+    @staticmethod
+    async def create(config: Dict) -> ReActAgent:
+        """Create a fully configured agent"""
 
+        # Initialize components
+        llm = LLMRunner(
+            model_path=config.get("model_path"),
+            model_type=config.get("model_type", "llama"),
+            quantization=config.get("quantization", "q4_k_m"),
+        )
 
-def get_agent() -> AuraAgentLoop:
-    """Get or create agent instance"""
-    global _agent_instance
-    if _agent_instance is None:
-        _agent_instance = AuraAgentLoop()
-    return _agent_instance
+        tool_registry = ToolRegistry()
 
+        memory = HierarchicalMemory(
+            working_size=config.get("working_memory", 10),
+            short_term_size=config.get("short_term_memory", 100),
+            db_path=config.get("memory_db_path"),
+        )
 
-__all__ = [
-    "AuraAgentLoop",
-    "AgentState",
-    "ReasoningStep",
-    "Thought",
-    "AgentContext",
-    "AgentResponse",
-    "get_agent",
-]
+        context_detector = ContextDetector()
+
+        learning_engine = LearningEngine(
+            memory=memory, patterns_path=config.get("patterns_path")
+        )
+
+        security_layer = SecurityLayer(
+            default_level=config.get("default_permission", "L1")
+        )
+
+        return ReActAgent(
+            llm=llm,
+            tool_registry=tool_registry,
+            memory=memory,
+            context_detector=context_detector,
+            learning_engine=learning_engine,
+            security_layer=security_layer,
+            max_iterations=config.get("max_iterations", 10),
+        )

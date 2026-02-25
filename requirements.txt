@@ -1,46 +1,21 @@
 # AURA v3 Dependencies
-# =====================
+# Core (required)
+aiofiles>=23.0.0
+pyyaml>=6.0
+cryptography>=41.0.0
 
-# Core
-asyncio-dgram>=2.1.0
-aiosqlite>=0.19.0
-
-# LLM - Local models support
-llama-cpp-python>=0.2.90
-# Optional: For GPU acceleration with CUDA
-# llama-cpp-python[cublas]>=0.2.90
+# LLM (optional - for advanced users)
+# Install manually if needed:
+# pip install llama-cpp-python
+# Or use pre-built wheels from:
+# https://github.com/abetlen/llama-cpp-python/releases
 
 # Telegram Bot
 python-telegram-bot>=20.0
 
-# Security/Encryption
-cryptography>=41.0.0
-
-# Voice/TTS
-gTTS>=2.3.0
-edge-tts>=6.1.0
-pyttsx3>=2.90
-numpy>=1.24.0
-
-# Web/API Server
-aiohttp>=3.9.0
-websockets>=12.0
-
-# Data/Storage
-SQLAlchemy>=2.0.0
-python-dateutil>=2.8.0
-
-# Utilities
-pyyaml>=6.0.0
-python-dotenv>=1.0.0
-pydantic>=2.0.0
-aiofiles>=23.0.0
+# Voice (optional)
+# pyttsx3>=2.90
 
 # Testing
-pytest>=7.4.0
+pytest>=7.0.0
 pytest-asyncio>=0.21.0
-pytest-cov>=4.1.0
-unittest-addons>=1.0.2
-
-# Logging/Monitoring
-colorlog>=6.8.0

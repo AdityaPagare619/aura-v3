@@ -1,285 +1,253 @@
-# AURA v3 - Your Personal AI Assistant
+# AURA v3 - Personal Mobile AGI Assistant
 
 <p align="center">
-  <strong>100% Offline | Privacy-First | Mobile-Optimized</strong>
+  <img src="https://img.shields.io/badge/Version-3.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/Platform-Termux-green" alt="Platform">
+  <img src="https://img.shields.io/badge/License-MIT-orange" alt="License">
+  <img src="https://img.shields.io/badge/Status-100%25%20Offline-purple" alt="Status">
 </p>
+
+Next-generation personal AI assistant that runs 100% offline on your Android device. Built with ReAct loop, hierarchical memory, self-improvement, and privacy-first design.
 
 ---
 
 ## Table of Contents
 
-1. [Quick Start](#quick-start)
-2. [Installation](#installation)
-3. [Features](#features)
-4. [Architecture](#architecture)
-5. [Configuration](#configuration)
-6. [Troubleshooting](#troubleshooting)
-7. [Security & Privacy](#security--privacy)
-8. [Enterprise](#enterprise)
-9. [Support](#support)
+1. [What is AURA v3?](#what-is-aura-v3)
+2. [Features](#features)
+3. [Requirements](#requirements)
+4. [Quick Start (5 Minutes)](#quick-start-5-minutes)
+5. [Detailed Setup Guide](#detailed-setup-guide)
+   - [Option 1: Auto Setup (Recommended)](#option-1-auto-setup-recommended)
+   - [Option 2: Manual Setup](#option-2-manual-setup)
+6. [How to Use](#how-to-use)
+   - [Running AURA](#running-aura)
+   - [Telegram Commands](#telegram-commands)
+   - [CLI Mode](#cli-mode)
+7. [Advanced Features](#advanced-features)
+   - [Security Levels](#security-levels)
+   - [Voice TTS](#voice-tts)
+   - [LLM Models](#llm-models)
+8. [Troubleshooting](#troubleshooting)
+9. [Architecture](#architecture)
+10. [Updating AURA](#updating-aura)
 
 ---
 
-## Quick Start
+## What is AURA v3?
 
-### Prerequisites
+AURA v3 is a **next-generation personal mobile AGI assistant** that:
 
-- **Python 3.8+** (3.10+ recommended)
-- **Android device** with Termux app installed
-- **4GB RAM minimum** (8GB recommended)
-- **2GB storage** for models and data
+- 🤖 **Truly Agentic**: Uses ReAct (Reasoning + Acting) loop with tool schemas
+- 📱 **Mobile-First**: Optimized for Android with Termux (4GB RAM)
+- 🔒 **100% Private**: No cloud, no data sharing, everything stays on device
+- 🧠 **Self-Improving**: Learns from every interaction (RISE-style reflection)
+- 🎯 **Context-Aware**: Knows time, location, and activity
+- 🛡️ **Secure**: L1-L4 permission levels with banking protection
 
-### Step 1: Install Termux
+### Why It's Different from v1/v2:
 
-Download Termux from F-Droid (recommended) or Google Play Store:
-- **F-Droid**: https://f-droid.org/packages/com.termux/
-- **Google Play**: Search "Termux" in Play Store
-
-> **Note**: If you have the old Play Store version, consider switching to F-Droid as it's actively maintained.
-
-### Step 2: Install AURA (Automated)
-
-```bash
-# Open Termux and run:
-curl -sSL https://raw.githubusercontent.com/aura-ai/aura-v3/main/installation/quickstart.sh | bash
-```
-
-### Step 3: Verify Installation
-
-```bash
-# Test AURA runs
-aura --version
-
-# Or run directly
-python -m src.main --test
-```
-
----
-
-## Installation
-
-### Option 1: One-Click Install (Recommended)
-
-```bash
-curl -sSL https://aura-ai.github.io/install.sh | bash
-```
-
-This script will:
-1. Check prerequisites
-2. Install required Python packages
-3. Download required models
-4. Configure AURA
-5. Start the service
-
-### Option 2: Manual Installation
-
-If you prefer manual control:
-
-```bash
-# 1. Update packages
-pkg update && pkg upgrade
-
-# 2. Install Python and dependencies
-pkg install python python-dev git curl
-
-# 3. Clone repository
-git clone https://github.com/aura-ai/aura-v3.git
-cd aura-v3
-
-# 4. Install Python packages
-pip install -r requirements.txt
-
-# 5. Configure
-cp config.example.yaml config.yaml
-# Edit config.yaml with your settings
-
-# 6. Run
-python -m src.main
-```
-
-### Option 3: Development Installation
-
-```bash
-# Clone and install in development mode
-git clone https://github.com/aura-ai/aura-v3.git
-cd aura-v3
-pip install -e .
-
-# Run tests
-pytest tests/
-
-# Run with debug logging
-python -m src.main --log-level=DEBUG
-```
-
-### Voice Input Setup (Optional)
-
-To enable voice commands:
-
-```bash
-# Install voice dependencies
-pkg install ffmpeg sox
-
-# Download language model
-# (Automatic on first run, or manual download)
-```
+| Feature | v1/v2 | v3 |
+|---------|-------|-----|
+| Tool Schemas | ❌ None | ✅ JSON schemas passed to LLM |
+| ReAct Loop | ❌ One-shot | ✅ Iterative reasoning |
+| Tool Results | ❌ Discarded | ✅ Fed back to LLM |
+| Model Loading | ❌ Every message | ✅ Persistent (stays in RAM) |
+| Learning | ❌ None | ✅ Intent/strategy patterns |
 
 ---
 
 ## Features
 
-### Core Capabilities
-
-| Feature | Description |
-|---------|-------------|
-| **Offline AI** | 100% local processing - no data leaves your device |
-| **Adaptive Personality** | Learns your communication style over time |
-| **Multi-Agent System** | Parallel processing for efficiency |
-| **Proactive Assistance** | Anticipates your needs |
-| **Life Tracking** | Remembers important details |
-| **Emotional Context** | Responds appropriately to your mood |
-
-### Technical Features
-
-- **Event-Driven Architecture**: Only processes when needed (battery efficient)
-- **Thermal Management**: Automatically throttles when device heats up
-- **Memory Hierarchy**: Optimizes for mobile RAM constraints
-- **Privacy-First**: No telemetry, no cloud, no tracking
+- **ReAct Agent Loop**: Think → Act → Observe → Think → ... → Respond
+- **Hierarchical Memory**: 5 layers (Immediate → Working → Short-term → Long-term → Self-model)
+- **Learning Engine**: Extracts patterns from conversations
+- **Context Detector**: Time, location, activity awareness
+- **Security Layer**: L1-L4 permissions, banking protection
+- **Android Tools**: SMS, calls, contacts, app launching with exploration memory
+- **Telegram Control**: Full control via Telegram bot commands
+- **Offline Voice**: eSpeak/pyttsx3 TTS (no internet needed)
 
 ---
 
-## Architecture
+## Requirements
 
-```
-AURA v3 Architecture
-===================
+### For Mobile (Android + Termux):
 
-┌─────────────────────────────────────────────────────────┐
-│                    USER INTERFACE                        │
-│  (CLI, Telegram Bot, Dashboard, Voice)                 │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────┐
-│                 CORE PROCESSING                          │
-│  ┌─────────────────┐  ┌─────────────────────────────┐  │
-│  │ Neuromorphic   │  │  Multi-Agent Orchestrator    │  │
-│  │ Engine         │  │  • Attention Agent           │  │
-│  │ (Event-driven) │  │  • Memory Agent              │  │
-│  └─────────────────┘  │  • Action Agent              │  │
-│                      │  • Monitor Agent             │  │
-│                      │  • Communication Agent       │  │
-│                      └─────────────────────────────┘  │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────┐
-│                  INTELLIGENCE LAYER                      │
-│  ┌──────────────┐ ┌──────────────┐ ┌────────────────┐   │
-│  │ LLM Manager  │ │ Neural       │ │ Context       │   │
-│  │ (Local LLM)  │ │ Memory       │ │ Provider      │   │
-│  └──────────────┘ └──────────────┘ └────────────────┘   │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────┐
-│                  MOBILE OPTIMIZATION                     │
-│  ┌──────────────┐ ┌──────────────┐ ┌────────────────┐   │
-│  │ Power Manager│ │ Thermal      │ │ Background     │   │
-│  │              │ │ Manager      │ │ Manager        │   │
-│  └──────────────┘ └──────────────┘ └────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-```
+| Requirement | Minimum | Recommended |
+|-------------|---------|-------------|
+| RAM | 4GB | 6GB+ |
+| Storage | 2GB free | 5GB+ |
+| Python | 3.9+ | 3.11+ |
+| Termux | Latest from F-Droid | - |
 
-### Key Components
+### For Desktop Testing:
 
-#### NeuromorphicEngine
-- Event-driven processing (SNN-inspired)
-- Sparse activation - only processes what's needed
-- Hardware-aware resource management
-
-#### MultiAgentOrchestrator
-- Parallel sub-agents for different tasks
-- Adaptive tick rates based on thermal state
-- F.R.I.D.A.Y.-style coordination
-
-#### MobilePowerManager
-- Battery-aware processing
-- Screen state detection
-- Doze mode handling
-
-#### AdaptivePersonalityEngine
-- Learns from interactions
-- Adapts to user preferences
-- Maintains consistent core identity
+- Python 3.9+
+- 4GB RAM
+- Linux/macOS/Windows (WSL)
 
 ---
 
-## Configuration
+## Quick Start (5 Minutes)
 
-### Configuration File
+### Step 1: Get Termux (Android)
 
-Create `config.yaml` in the project root:
-
-```yaml
-# AURA v3 Configuration
-
-# Core Settings
-core:
-  # LLM Configuration
-  llm:
-    provider: "llama.cpp"  # or "ollama", "transformers"
-    model_path: "./models/llama-7b-chat.gguf"
-    max_tokens: 1024
-    temperature: 0.7
-    
-  # Memory Configuration
-  memory:
-    episodic_limit: 1000
-    semantic_limit: 5000
-    consolidation_interval: 3600
-
-# Power Management
-power:
-  full_power_threshold: 50    # % battery for full power
-  balanced_threshold: 20     # % battery for balanced
-  power_save_threshold: 10  # % battery for power save
-  critical_threshold: 5     # % battery for critical
-  
-  # Processing limits per mode
-  max_tokens_full: 2048
-  max_tokens_balanced: 1024
-  max_tokens_save: 512
-  max_tokens_ultra: 256
-
-# Privacy Settings
-privacy:
-  log_level: "WARNING"  # DEBUG, INFO, WARNING, ERROR
-  store_conversations: true
-  anonymize_data: true
-  allow_telemetry: false  # NEVER sends data out
-
-# Features
-features:
-  voice_enabled: false
-  proactive_mode: true
-  background_tasks: true
-  notifications: true
-
-# Security
-security:
-  require_auth: false
-  session_timeout: 3600
-  max_failed_attempts: 5
+```
+1. Download Termux from F-Droid (NOT Google Play - outdated!)
+2. Open Termux
 ```
 
-### Environment Variables
-
-You can also configure via environment variables:
+### Step 2: Run Auto Setup
 
 ```bash
-export AURA_CONFIG_PATH=/path/to/config.yaml
-export AURA_DATA_PATH=/path/to/data
-export AURA_LOG_LEVEL=INFO
-export AURA_VOICE_ENABLED=true
+# Clone and run auto setup
+git clone https://github.com/AdityaPagare619/aura-v3.git
+cd aura-v3
+python scripts/auto_setup.py
 ```
+
+The script will:
+- ✅ Install all dependencies
+- ✅ Create required directories
+- ✅ Configure Telegram
+- ✅ Test imports
+- ✅ Create run/stop scripts
+
+### Step 3: Start AURA
+
+```bash
+# Start the bot
+bash run_aura.sh
+
+# OR manually
+python main.py --mode telegram
+```
+
+### Step 4: Connect Telegram
+
+```
+1. Open Telegram
+2. Search for your bot (check .env for token)
+3. Send /start
+```
+
+**That's it!** 🎉
+
+---
+
+## Detailed Setup Guide
+
+### Option 1: Auto Setup (Recommended)
+
+```bash
+# Clone repository
+git clone https://github.com/AdityaPagare619/aura-v3.git
+cd aura-v3
+
+# Run auto setup
+python scripts/auto_setup.py
+```
+
+This script handles everything automatically.
+
+### Option 2: Manual Setup
+
+If you prefer manual installation:
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Create directories
+mkdir -p logs data/memories data/sessions data/patterns models
+
+# 3. Set Telegram token
+export TELEGRAM_TOKEN="your_token_here"
+
+# 4. Run
+python main.py --mode telegram
+```
+
+---
+
+## How to Use
+
+### Running AURA
+
+```bash
+# Start in Telegram mode (recommended)
+python main.py --mode telegram
+
+# Or use convenience scripts
+bash run_aura.sh    # Start in background
+bash stop_aura.sh   # Stop
+bash status_aura.sh # Check status
+```
+
+### Telegram Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Start AURA |
+| `/stop` | Stop AURA |
+| `/restart` | Restart AURA |
+| `/status` | Check system status |
+| `/help` | Show all commands |
+| `/test` | Run functionality tests |
+| `/setup` | Interactive setup wizard |
+| `/config` | Show current configuration |
+| `/setlevel L1-L4` | Set security level |
+| `/setvoice <engine>` | Set TTS engine |
+| `/models` | List available LLM models |
+| `/voices` | List TTS engines |
+| `/memory` | Show memory statistics |
+| `/clear` | Clear conversation |
+
+### Just Chat!
+
+Once started, you can just send messages to the bot and AURA will respond!
+
+---
+
+## Advanced Features
+
+### Security Levels
+
+AURA has 4 permission levels:
+
+| Level | Name | Description |
+|-------|------|-------------|
+| L1 | Full Trust | No confirmations needed |
+| L2 | Normal | Confirm calls/messages |
+| L3 | Restricted | Confirm most actions |
+| L4 | Maximum | Confirm everything |
+
+Set via: `/setlevel L2`
+
+### Voice TTS
+
+Available engines:
+
+| Engine | Type | Quality | Internet Needed |
+|--------|------|---------|-----------------|
+| espeak | Offline | Basic | No |
+| pyttsx3 | Offline | Good | No |
+| sarvam | Online | Best | Yes |
+
+Set via: `/setvoice espeak`
+
+### LLM Models
+
+Recommended for mobile (4GB RAM):
+
+| Model | Size | Quality |
+|-------|------|---------|
+| Qwen2.5-1B Q5_K_M | ~625MB | Good |
+| Phi-3-mini | ~2.5GB | Better |
+| Mistral-7B | ~4GB | Best |
+
+Download from: https://huggingface.co/TheBloke
 
 ---
 
@@ -287,216 +255,139 @@ export AURA_VOICE_ENABLED=true
 
 ### Common Issues
 
-#### 1. Installation Fails
+#### 1. "llama-cpp-python not found"
 
-**Problem**: Installation script fails on dependencies
-
-**Solution**:
 ```bash
-# Update package lists
-pkg update && pkg upgrade
+# Install with pre-built wheel
+pip install llama-cpp-python --only-binary :all:
+```
 
-# Install manually
-pip install -r requirements.txt --no-cache-dir
+#### 2. "espeak not found"
 
-# If numpy fails, try:
-pip install --upgrade pip setuptools wheel
-pip install numpy
+```bash
+# In Termux
+apt install espeak-ng
+```
+
+#### 3. "Telegram token invalid"
+
+Get new token from @BotFather, then:
+```bash
+# Update .env file
+nano .env
+# OR
+export TELEGRAM_TOKEN="new_token"
+```
+
+#### 4. "Port already in use"
+
+```bash
+# Kill existing process
+bash stop_aura.sh
+
+# OR manually
+pkill -f "python.*main.py"
+```
+
+#### 5. "Import errors"
+
+```bash
+# Reinstall dependencies
 pip install -r requirements.txt
 ```
 
-#### 2. Out of Memory
-
-**Problem**: AURA crashes with memory errors
-
-**Solution**:
-- Reduce model size (use 7B instead of 13B)
-- Adjust `max_tokens` in config
-- Enable power save mode
-- Close other apps
-
-```yaml
-# In config.yaml
-power:
-  max_tokens_balanced: 512  # Reduce from 1024
-```
-
-#### 3. Slow Response
-
-**Problem**: First response takes 15+ seconds
-
-**Solution**:
-- Preload the model at startup
-- Use a smaller model
-- Check thermal state (may be throttling)
-
-```yaml
-# In config.yaml
-core:
-  llm:
-    preload: true
-    n_gpu_layers: 99  # Maximize GPU usage on mobile
-```
-
-#### 4. Voice Not Working
-
-**Problem**: Voice input not recognized
-
-**Solution**:
-```bash
-# Install audio dependencies
-pkg install ffmpeg sox
-
-# Check microphone permissions in Termux
-termux-setup-storage
-
-# Test microphone
-rec test.wav
-# Speak, then Ctrl+C
-# Play back: play test.wav
-```
-
-#### 5. Battery Drain
-
-**Problem**: Device gets warm / battery drains fast
-
-**Solution**:
-AURA v3 has built-in power management. Ensure it's enabled:
-
-```yaml
-# In config.yaml
-power:
-  full_power_threshold: 50
-  balanced_threshold: 30  # More conservative
-```
-
-Also:
-- Use power save mode when mobile
-- Disable proactive features when not needed
-- Reduce background task frequency
-
-#### 6. Thermal Throttling
-
-**Problem**: AURA slows down after extended use
-
-**Solution**:
-This is intentional! AURA monitors thermal state and automatically throttles to protect your device. The system will return to full speed once the device cools down.
-
----
-
-## Security & Privacy
-
-### Privacy Commitment
-
-AURA is designed with privacy as a core principle:
-
-| Aspect | AURA Implementation |
-|--------|---------------------|
-| **Data Storage** | All data stored locally on device |
-| **Network Access** | None required for core functionality |
-| **Telemetry** | Zero telemetry - we can't see your data |
-| **Updates** | Optional, verifiable updates only |
-| **Authentication** | Optional local PIN/biometric |
-
-### Security Features
-
-- Local-only processing
-- Optional authentication
-- Session timeout
-- Failed attempt lockout
-- Encrypted local storage option
-
-### Verification
-
-You can verify AURA's privacy:
+### Check Logs
 
 ```bash
-# Monitor network traffic while AURA runs
-# On another device or with tcpdump
-# AURA should make ZERO network requests
+# View live logs
+tail -f aura.log
 
-# Check logs for any network calls
-grep -i "http\|https\|requests" logs/aura.log
+# Or check last 50 lines
+tail -n 50 aura.log
+```
+
+### Test Components
+
+```bash
+# Test individual modules
+python -c "from src.agent.loop import ReActAgent; print('Agent OK')"
+python -c "from src.llm import LLMRunner; print('LLM OK')"
+python -c "from src.memory import HierarchicalMemory; print('Memory OK')"
 ```
 
 ---
 
-## Enterprise
+## Architecture
 
-### Enterprise Features
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        AURA v3                              │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────┐    ┌────────────┐    ┌──────────────────┐   │
+│  │ Telegram │───▶│   Agent    │───▶│   Tool Executor  │   │
+│  │   Bot    │    │  (ReAct)   │    │                  │   │
+│  └──────────┘    └────────────┘    └──────────────────┘   │
+│        │                 │                     │             │
+│        ▼                 ▼                     ▼             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              Hierarchical Memory                    │    │
+│  │  Immediate → Working → Short → Long → Self-Model   │    │
+│  └─────────────────────────────────────────────────────┘    │
+│        │                 │                     │             │
+│        ▼                 ▼                     ▼             │
+│  ┌──────────┐    ┌────────────┐    ┌──────────────────┐     │
+│  │ Learning │    │  Context   │    │     Security    │     │
+│  │ Engine   │    │  Detector  │    │      Layer      │     │
+│  └──────────┘    └────────────┘    └──────────────────┘     │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐     │
+│  │              LLM (llama.cpp / Mock)                 │     │
+│  └─────────────────────────────────────────────────────┘     │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
 
-AURA v3 offers enterprise-ready capabilities:
+### Key Components:
 
-| Feature | Availability |
-|---------|---------------|
-| SOC2 Compliance | In Progress |
-| GDPR Compliance | Full |
-| HIPAA Compliance | Roadmap |
-| SSO Integration | Planned |
-| Central Management | Planned |
+1. **Agent Loop**: ReAct pattern with JSON tool schemas
+2. **Memory**: 5-layer hierarchical (immediate → working → short → long → self)
+3. **Learning**: Intent patterns, contact priorities, strategy improvement
+4. **Context**: Time, location, activity detection
+5. **Security**: L1-L4 permissions, banking protection, audit logs
+6. **Tools**: Android actions with exploration memory
 
-### Deployment Options
+---
 
-#### On-Device (Current)
-- Individual Android devices
-- Full local control
-- Zero infrastructure
+## Updating AURA
 
-#### Enterprise (Roadmap)
-- Centralized management
-- Policy enforcement
-- Audit logging
-- Support packages
+```bash
+# Navigate to directory
+cd ~/aura-v3
 
-### Compliance Documentation
+# Pull latest
+git pull origin main
 
-See the `compliance/` directory for:
-- [SECURITY.md](compliance/SECURITY.md) - Security practices
-- [PRIVACY.md](compliance/PRIVACY.md) - Privacy policy
-- [COMPLIANCE.md](compliance/COMPLIANCE.md) - Compliance details
+# Restart
+bash stop_aura.sh
+bash run_aura.sh
+```
 
 ---
 
 ## Support
 
-### Documentation
-
-- [API Documentation](docs/API.md)
-- [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
-- [Architecture Guide](docs/ARCHITECTURE.md)
-
-### Community
-
-- GitHub Issues: https://github.com/aura-ai/aura-v3/issues
-- Discussions: https://github.com/aura-ai/aura-v3/discussions
-
-### Getting Help
-
-```bash
-# Run diagnostics
-python -m src.main --diagnostics
-
-# Get verbose logs
-python -m src.main --log-level=DEBUG
-
-# Check status
-python -m src.main --status
-```
+- Issues: https://github.com/AdityaPagare619/aura-v3/issues
+- Telegram: Message your bot and use /help
 
 ---
 
 ## License
 
-AURA v3 - Copyright 2024 AURA AI
-
-See LICENSE file for details.
+MIT License - See LICENSE file
 
 ---
 
-## Contributing
-
-We welcome contributions! See CONTRIBUTING.md for guidelines.
-
----
-
-*Built with privacy-first principles. Your data never leaves your device.*
+<p align="center">
+  Made with ❤️ for privacy-first AI
+</p>

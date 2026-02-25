@@ -1,24 +1,13 @@
 """
-AURA v3 Session Package
-Comprehensive session management
+AURA Session Module
+
+Manages user sessions with encryption and persistence.
 """
 
-from src.session.manager import (
-    SessionManager,
-    SessionType,
-    SessionState,
-    SessionConfig,
-    Session,
-    InteractionTurn,
-    get_session_manager,
-)
+from .manager import SessionManager, Session, EncryptedStorage
 
 __all__ = [
     "SessionManager",
-    "SessionType",
-    "SessionState",
-    "SessionConfig",
     "Session",
-    "InteractionTurn",
-    "get_session_manager",
+    "EncryptedStorage",
 ]
