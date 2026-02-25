@@ -218,16 +218,91 @@ class IntelligentCallManager:
             await asyncio.sleep(10)  # Check every 10 seconds
 
     async def _monitor_incoming_calls(self):
-        """Monitor for incoming calls"""
-        # Implementation would check for incoming calls
-        pass
+        """Monitor for incoming calls - PROACTIVE call handling"""
+        
+        # Check if we have a termux bridge to detect calls
+        if not self.termux_bridge:
+            # Without termux bridge, we can't monitor - this is expected on non-Android
+            return
+            
+        try:
+            # Poll for incoming call status
+            # This would interface with Android CallLog or TelephonyManager
+            # For now, we'll check if there's a pending call to handle
+            
+            # Example: Check for missed calls that need follow-up
+            # missed = await self.termux_bridge.get_missed_calls()
+            # for call in missed:
+            #     await self._handle_missed_call(call)
+            
+            pass  # Placeholder - actual implementation depends on platform
+            
+        except Exception as e:
+            logger.debug(f'Call monitoring error (expected on non-Android): {e}')
+
+    async def _handle_missed_call(self, call_data: Dict):
+        """Handle a missed call proactively"""
+        
+        phone_number = call_data.get('phone_number')
+        caller_name = call_data.get('caller_name', 'Unknown')
+        
+        logger.info(f'PROACTIVE: Handling missed call from {caller_name}')
+        
+        # Get caller profile
+        if phone_number in self.callers:
+            caller = self.callers[phone_number]
+            
+            # If important relationship, offer to call back
+            if caller.relationship in [CallerRelationship.FAMILY, CallerRelationship.BOSS]:
+                if hasattr(self, 'proactive_engine') and self.proactive_engine:
+                    await self.proactive_engine.trigger_action(
+                        action_type='missed_call_followup',
+                        data={
+                            'phone_number': phone_number,
+                            'caller_name': caller_name,
+                            'relationship': caller.relationship.value,
+                            'last_call': caller.last_call.isoformat() if caller.last_call else None,
+                        }
+                    )
 
     _running = False
     _call_monitor_task = None
 
     async def _load_callers_from_memory(self):
         """Load caller profiles from neural memory"""
-        pass
+        if not self.neural_memory:
+            return
+            
+        try:
+            # Load caller profiles
+            neurons = await self.neural_memory.recall(
+                query='caller_profile',
+                memory_types=['semantic'],
+                limit=50
+            )
+            
+            for neuron in neurons:
+                if hasattr(neuron, 'metadata') and neuron.metadata:
+                    caller_data = neuron.metadata.get('caller_data')
+                    if caller_data:
+                        phone = caller_data.get('phone_number')
+                        if phone:
+                            # Reconstruct CallerProfile
+                            caller = CallerProfile(
+                                phone_number=phone,
+                                name=caller_data.get('name', 'Unknown'),
+                                relationship=CallerRelationship[caller_data.get('relationship', 'UNKNOWN')],
+                                relationship_strength=caller_data.get('relationship_strength', 0.5),
+                                total_calls=caller_data.get('total_calls', 0),
+                                answered_calls=caller_data.get('answered_calls', 0),
+                                missed_calls=caller_data.get('missed_calls', 0),
+                                avg_duration_minutes=caller_data.get('avg_duration_minutes', 0.0),
+                            )
+                            self.callers[phone] = caller
+                            
+            logger.info(f'Loaded {len(self.callers)} caller profiles from memory')
+        except Exception as e:
+            logger.warning(f'Could not load callers: {e}')
 
     # =========================================================================
     # CALL ANALYSIS

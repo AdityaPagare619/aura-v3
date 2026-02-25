@@ -11,6 +11,7 @@ Mobile-specific power management:
 """
 
 import asyncio
+import shlex
 import logging
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
@@ -178,12 +179,14 @@ class MobilePowerManager:
         }
 
     async def _run_termux_cmd(self, cmd: str) -> str:
-        """Run a Termux command"""
+        """Run a Termux command - SECURED: uses list args instead of shell=True"""
         import subprocess
 
         try:
+            # FIXED: Use list args to avoid shell injection
+            cmd_list = shlex.split(cmd)
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=5
+                cmd_list, shell=False, capture_output=True, text=True, timeout=5
             )
             return result.stdout if result.returncode == 0 else ""
         except:
@@ -352,12 +355,14 @@ class MobileSensorManager:
         self._available_sensors[SensorType.CAMERA] = True  # Assume available
 
     async def _run_cmd(self, cmd: str):
-        """Run command"""
+        """Run command - SECURED: uses list args instead of shell=True"""
         import subprocess
 
         try:
+            # FIXED: Use list args to avoid shell injection
+            cmd_list = shlex.split(cmd)
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=10
+                cmd_list, shell=False, capture_output=True, text=True, timeout=10
             )
             return type(
                 "obj",

@@ -208,12 +208,54 @@ class AuraProduction:
         self._neural_memory = get_neural_memory()
 
         # Initialize Memory Coordinator (NEW!)
-        from src.memory.memory_coordinator import get_memory_coordinator
+        from src.memory.memory_coordinator import get_memory_coordinator, MemoryType
+        from src.memory import EpisodicMemory, SemanticMemory
+        from src.memory.ancestor_memory import AncestorMemory
 
         self._memory_coordinator = get_memory_coordinator()
+
+        # Register all memory systems with proper error handling
+        # 1. Working Memory (NeuralMemory)
         self._memory_coordinator.set_memory_system(
             MemoryType.WORKING, self._neural_memory
         )
+
+        # 2. Initialize and register Episodic Memory
+        try:
+            self._episodic_memory = EpisodicMemory(db_path="data/memory/episodic.db")
+            self._memory_coordinator.set_memory_system(
+                MemoryType.EPISODIC, self._episodic_memory
+            )
+            logger.info("Episodic Memory initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Episodic Memory: {e}")
+            self._episodic_memory = None
+
+        # 3. Initialize and register Semantic Memory
+        try:
+            self._semantic_memory = SemanticMemory(db_path="data/memory/semantic.db")
+            self._memory_coordinator.set_memory_system(
+                MemoryType.SEMANTIC, self._semantic_memory
+            )
+            logger.info("Semantic Memory initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Semantic Memory: {e}")
+            self._semantic_memory = None
+
+        # 4. Initialize and register Ancestor Memory
+        try:
+            self._ancestor_memory = AncestorMemory(db_path="data/memory/ancestor.db")
+            self._memory_coordinator.set_memory_system(
+                MemoryType.ANCESTOR, self._ancestor_memory
+            )
+            logger.info("Ancestor Memory initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Ancestor Memory: {e}")
+            self._ancestor_memory = None
+
+        # Start memory consolidation loop - THIS WAS MISSING!
+        await self._memory_coordinator.initialize()
+        logger.info("Memory consolidation loop started")
 
         self._agent_loop = get_agent()
 

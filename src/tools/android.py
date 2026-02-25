@@ -4,6 +4,7 @@ import logging
 import os
 import sqlite3
 import subprocess
+import shlex
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
@@ -161,10 +162,15 @@ class AndroidShell:
         self.adb_path = adb_path
 
     async def run(self, command: str, timeout: int = 10) -> str:
-        """Run shell command"""
+        """Run shell command - SECURED: uses subprocess_exec with argument list"""
         try:
-            process = await asyncio.create_subprocess_shell(
-                command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            # FIXED: Use shlex.split to properly parse command into list
+            # This avoids shell injection by using create_subprocess_exec instead of shell
+            cmd_list = shlex.split(command)
+            process = await asyncio.create_subprocess_exec(
+                *cmd_list,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
             try:
                 stdout, stderr = await asyncio.wait_for(

@@ -204,6 +204,8 @@ class ResourceMonitor:
             try:
                 import subprocess
 
+                # SAFE: Hardcoded command with pipes - no user input reaches here
+                # shell=True required for pipe functionality; psutil is tried first
                 result = subprocess.run(
                     "top -bn1 | grep 'Cpu(s)' | awk '{print $2}'",
                     shell=True,
@@ -237,6 +239,8 @@ class ResourceMonitor:
             try:
                 import subprocess
 
+                # SAFE: Hardcoded command with pipes - no user input reaches here
+                # shell=True required for pipe functionality; psutil is tried first
                 result = subprocess.run(
                     "free | grep Mem | awk '{print ($3/$2) * 100.0}'",
                     shell=True,
@@ -256,9 +260,10 @@ class ResourceMonitor:
         try:
             import subprocess
 
+            # SECURED: Simple command - no shell needed
             result = subprocess.run(
-                "termux-battery-status",
-                shell=True,
+                ["termux-battery-status"],
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=5,

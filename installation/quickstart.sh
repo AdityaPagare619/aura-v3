@@ -4,12 +4,12 @@
 # =============================
 # One-command installation for Termux/Android
 #
-# Usage: curl -sSL https://raw.githubusercontent.com/aura-ai/aura-v3/main/installation/quickstart.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/AdityaPagare619/aura-be-right-back/main/installation/quickstart.sh | bash
 
 set -euo pipefail
 
 AURA_DIR="${AURA_DIR:-$HOME/aura-v3}"
-REPO_URL="https://github.com/aura-ai/aura-v3.git"
+REPO_URL="https://github.com/AdityaPagare619/aura-be-right-back.git"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

@@ -7,6 +7,7 @@ This is the "nervous system" - real-time environmental awareness
 """
 
 import asyncio
+import shlex
 import logging
 import json
 import os
@@ -507,10 +508,12 @@ class ContextProvider:
         return "; ".join(parts)
 
     async def _run_termux_command(self, cmd: str) -> Optional[str]:
-        """Run a Termux command"""
+        """Run a Termux command - SECURED: uses list args instead of shell"""
         try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            # FIXED: Use list args to avoid shell injection
+            cmd_list = shlex.split(cmd)
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_list, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
             if proc.returncode == 0:

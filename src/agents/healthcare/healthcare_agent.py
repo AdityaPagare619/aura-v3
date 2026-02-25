@@ -41,6 +41,13 @@ from src.agents.healthcare.fitness_tracker import FitnessTracker
 from src.agents.healthcare.health_insights import HealthInsightsEngine
 from src.agents.healthcare.personality import HealthcarePersonality, InteractionContext
 
+# Import SecureStorage for encrypted data storage
+try:
+    from src.core.security_layers import SecureStorage
+    SECURE_STORAGE_AVAILABLE = True
+except ImportError:
+    SECURE_STORAGE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,6 +84,15 @@ class HealthcareAgent(Agent):
         self.storage_path = storage_path
         os.makedirs(storage_path, exist_ok=True)
 
+        # Initialize encrypted storage for sensitive health data
+        self._secure_storage = None
+        if SECURE_STORAGE_AVAILABLE:
+            try:
+                self._secure_storage = SecureStorage(storage_path, encrypt_by_default=True)
+                logger.info("Healthcare data encryption enabled")
+            except Exception as e:
+                logger.warning(f"Failed to initialize secure storage: {e}")
+
         self._analyzer = HealthDataAnalyzer(storage_path)
         self._diet_planner = DietPlanner(storage_path)
         self._fitness_tracker = FitnessTracker(storage_path)
@@ -96,11 +112,29 @@ class HealthcareAgent(Agent):
         return self
 
     def _load_profile(self):
-        """Load user health profile"""
-        profile_file = os.path.join(self.storage_path, "profile.json")
-        if os.path.exists(profile_file):
+        """Load user health profile - WITH DECRYPTION"""
+        profile_file = "profile.json"
+        
+        # Try encrypted storage first
+        if self._secure_storage is not None:
+            data = self._secure_storage.load(profile_file)
+            if data is not None:
+                try:
+                    goals = [HealthGoal(g) for g in data.get("goals", [])]
+                    data["goals"] = goals
+                    self._profile = HealthProfile(**data)
+                    self._analyzer.set_profile(self._profile)
+                    self._insights_engine.set_goals(goals)
+                    logger.info("Loaded encrypted health profile")
+                    return
+                except Exception as e:
+                    logger.error(f"Failed to load encrypted health profile: {e}")
+        
+        # Fallback to plain JSON (for backwards compatibility)
+        profile_path = os.path.join(self.storage_path, profile_file)
+        if os.path.exists(profile_path):
             try:
-                with open(profile_file) as f:
+                with open(profile_path) as f:
                     data = json.load(f)
                     goals = [HealthGoal(g) for g in data.get("goals", [])]
                     data["goals"] = goals
@@ -111,29 +145,38 @@ class HealthcareAgent(Agent):
                 logger.error(f"Failed to load health profile: {e}")
 
     def _save_profile(self):
-        """Save user health profile"""
+        """Save user health profile - WITH ENCRYPTION"""
         if not self._profile:
             return
 
-        profile_file = os.path.join(self.storage_path, "profile.json")
+        profile_file = "profile.json"
+        
+        data = {
+            "user_id": self._profile.user_id,
+            "age": self._profile.age,
+            "gender": self._profile.gender,
+            "height_cm": self._profile.height_cm,
+            "weight_kg": self._profile.weight_kg,
+            "target_weight_kg": self._profile.target_weight_kg,
+            "activity_level": self._profile.activity_level,
+            "goals": [g.value for g in self._profile.goals],
+            "dietary_restrictions": self._profile.dietary_restrictions,
+            "allergies": self._profile.allergies,
+        }
+        
+        # Use encrypted storage
+        if self._secure_storage is not None:
+            if self._secure_storage.save(profile_file, data, encrypt=True):
+                logger.info("Health profile saved with encryption")
+                return
+            else:
+                logger.warning("Failed to save encrypted profile, falling back to plain")
+        
+        # Fallback to plain JSON
+        profile_path = os.path.join(self.storage_path, profile_file)
         try:
-            with open(profile_file, "w") as f:
-                json.dump(
-                    {
-                        "user_id": self._profile.user_id,
-                        "age": self._profile.age,
-                        "gender": self._profile.gender,
-                        "height_cm": self._profile.height_cm,
-                        "weight_kg": self._profile.weight_kg,
-                        "target_weight_kg": self._profile.target_weight_kg,
-                        "activity_level": self._profile.activity_level,
-                        "goals": [g.value for g in self._profile.goals],
-                        "dietary_restrictions": self._profile.dietary_restrictions,
-                        "allergies": self._profile.allergies,
-                    },
-                    f,
-                    indent=2,
-                )
+            with open(profile_path, "w") as f:
+                json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save profile: {e}")
 

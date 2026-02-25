@@ -23,19 +23,21 @@ logger = logging.getLogger(__name__)
 class STTBackend(Enum):
     """STT backend types"""
 
+    VOSK = "vosk"  # Lightweight, mobile-friendly
     WHISPER = "whisper"
     WHISPER_CPP = "whisper_cpp"
     COQUI = "coqui"
     FASTER_WHISPER = "faster_whisper"
     AZURE = "azure"
     GOOGLE = "google"
+    MOCK = "mock"  # Fallback when no backend available
 
 
 @dataclass
 class STTConfig:
     """STT Configuration"""
 
-    backend: STTBackend = STTBackend.FASTER_WHISPER
+    backend: STTBackend = STTBackend.FASTER_WHISPER  # Changed by get_default_backend() at runtime
     model_name: str = "base"
     model_path: Optional[str] = None
     language: str = "en"
@@ -50,6 +52,53 @@ class STTConfig:
     streaming: bool = True
     enable_partial_results: bool = True
     device: str = "auto"
+
+# Platform detection and backend selection
+# =============================================================================
+
+def detect_platform() -> str:
+    """Detect the current platform"""
+    import os
+    import platform
+    if "ANDROID_ROOT" in os.environ or os.path.exists("/data/data/com.termux"):
+        return "termux"
+    elif platform.system() == "Windows":
+        return "windows"
+    elif platform.system() == "Linux":
+        return "linux"
+    elif platform.system() == "Darwin":
+        return "macos"
+    return "unknown"
+
+
+def get_default_backend() -> STTBackend:
+    """Get the best available STT backend for current platform"""
+    # Try Vosk first (lightweight, works everywhere)
+    try:
+        import vosk
+        return STTBackend.VOSK
+    except ImportError:
+        pass
+    
+    # Try Faster Whisper
+    try:
+        import faster_whisper
+        return STTBackend.FASTER_WHISPER
+    except ImportError:
+        pass
+    
+    # Try Whisper.cpp
+    try:
+        import whispercpp
+        return STTBackend.WHISPER_CPP
+    except ImportError:
+        pass
+    
+    # Fallback to mock
+    return STTBackend.MOCK
+
+
+
 
 
 @dataclass
@@ -99,6 +148,153 @@ class STTEngineBase(ABC):
     def unload(self) -> None:
         """Unload the model"""
         pass
+
+
+class VoskEngine(STTEngineBase):
+    """Vosk STT engine - lightweight, mobile-friendly, offline"""
+    
+    VOSK_MODELS = {
+        "tiny": "vosk-model-tiny-en-us-0.15",
+        "small": "vosk-model-small-en-us-0.15",
+        "medium": "vosk-model-en-us-0.15",
+    }
+
+    def __init__(self):
+        self.model = None
+        self.config = None
+        self._lock = threading.Lock()
+        
+    async def load_model(self, config: STTConfig) -> bool:
+        """Load Vosk model"""
+        self.config = config
+        
+        try:
+            import vosk
+            
+            model_name = config.model_name or "small"
+            model_id = self.VOSK_MODELS.get(model_name, self.VOSK_MODELS["small"])
+            
+            model_path = config.model_path
+            if not model_path:
+                possible_paths = [
+                    f"models/{model_id}",
+                    f"models/vosk/{model_id}",
+                    str(Path.home() / ".cache" / "aura" / "vosk" / model_id),
+                    "/data/data/com.termux/files/home/.cache/aura/vosk/" + model_id,
+                ]
+                for path in possible_paths:
+                    if Path(path).exists():
+                        model_path = path
+                        break
+                        
+            if not model_path or not Path(model_path).exists():
+                logger.warning(f"Vosk model not found at: {model_path}")
+                logger.info("Download models from: https://alphacephei.com/vosk/models")
+                return False
+                
+            logger.info(f"Loading Vosk model from: {model_path}")
+            
+            def _load():
+                return vosk.Model(model_path)
+            
+            self.model = await asyncio.to_thread(_load)
+            logger.info("Vosk model loaded successfully")
+            return True
+            
+        except ImportError:
+            logger.error("vosk not installed: pip install vosk")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to load Vosk model: {e}")
+            return False
+    
+    async def transcribe(
+        self, audio_data: bytes, language: Optional[str] = None, partial: bool = False
+    ) -> STTResult:
+        """Transcribe audio data using Vosk"""
+        if not self.model:
+            return STTResult(text="", partial=False, backend=STTBackend.VOSK)
+            
+        language = language or self.config.language
+        
+        try:
+            import vosk
+            import json
+            start_time = time.perf_counter()
+            
+            audio_np = np.frombuffer(audio_data, dtype=np.int16)
+            
+            def _transcribe():
+                rec = vosk.KaldiRecognizer(self.model, self.config.sample_rate)
+                chunk_size = 4000
+                for i in range(0, len(audio_np), chunk_size):
+                    chunk = audio_np[i:i+chunk_size]
+                    rec.AcceptWaveform(chunk.tobytes())
+                return rec.FinalResult()
+            
+            result_json = await asyncio.to_thread(_transcribe)
+            result_dict = json.loads(result_json)
+            
+            text = result_dict.get("text", "")
+            confidence = result_dict.get("confidence", 0.0)
+            processing_time = time.perf_counter() - start_time
+            
+            return STTResult(
+                text=text.strip(),
+                partial=partial,
+                confidence=confidence,
+                language=language,
+                processing_time=processing_time,
+                backend=STTBackend.VOSK,
+            )
+            
+        except Exception as e:
+            logger.error(f"Vosk transcription error: {e}")
+            return STTResult(text="", partial=partial, backend=STTBackend.VOSK)
+    
+    async def transcribe_stream(self, audio_chunk: bytes) -> AsyncIterator[STTResult]:
+        if not self.model:
+            return
+        yield STTResult(text="", partial=True, backend=STTBackend.VOSK)
+    
+    def is_loaded(self) -> bool:
+        return self.model is not None
+    
+    def unload(self) -> None:
+        with self._lock:
+            self.model = None
+            import gc
+            gc.collect()
+
+
+class MockSTTEngine(STTEngineBase):
+    """Mock STT engine for fallback"""
+    
+    def __init__(self):
+        self._loaded = False
+        
+    async def load_model(self, config: STTConfig) -> bool:
+        self._loaded = True
+        logger.info("Mock STT engine loaded (no real backend available)")
+        return True
+        
+    async def transcribe(
+        self, audio_data: bytes, language: Optional[str] = None, partial: bool = False
+    ) -> STTResult:
+        return STTResult(
+            text="[STT not available - install vosk or faster-whisper]",
+            partial=partial,
+            backend=STTBackend.MOCK
+        )
+        
+    async def transcribe_stream(self, audio_chunk: bytes) -> AsyncIterator[STTResult]:
+        yield STTResult(text="", partial=True, backend=STTBackend.MOCK)
+        
+    def is_loaded(self) -> bool:
+        return self._loaded
+        
+    def unload(self) -> None:
+        self._loaded = False
 
 
 class FasterWhisperEngine(STTEngineBase):
@@ -359,6 +555,9 @@ class STTProcessor:
     """
 
     def __init__(self, config: STTConfig):
+        # Apply default backend if not specified
+        if config.backend == STTBackend.FASTER_WHISPER:
+            config.backend = get_default_backend()
         self.config = config
         self.engine = self._create_engine()
         self._audio_buffer: List[bytes] = []
@@ -369,14 +568,22 @@ class STTProcessor:
 
     def _create_engine(self) -> STTEngineBase:
         """Create STT engine based on config"""
-        if self.config.backend == STTBackend.FASTER_WHISPER:
+        if self.config.backend == STTBackend.VOSK:
+            return VoskEngine()
+        elif self.config.backend == STTBackend.FASTER_WHISPER:
             return FasterWhisperEngine()
         elif self.config.backend == STTBackend.WHISPER_CPP:
             return WhisperCppEngine()
         elif self.config.backend == STTBackend.COQUI:
             return CoquiEngine()
+        elif self.config.backend == STTBackend.MOCK:
+            return MockSTTEngine()
         else:
-            return FasterWhisperEngine()  # Default
+            # Auto-detect best available backend
+            default = get_default_backend()
+            logger.info(f"Backend {self.config.backend} not available, using {default}")
+            self.config.backend = default
+            return self._create_engine()
 
     async def initialize(self) -> bool:
         """Initialize the STT engine"""
@@ -532,6 +739,10 @@ __all__ = [
     "STTProcessor",
     "STTEngineBase",
     "STTBackend",
+    "VoskEngine",
+    "MockSTTEngine",
     "create_stt_processor",
     "estimate_stt_latency",
+    "get_default_backend",
+    "detect_platform",
 ]

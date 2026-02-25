@@ -5,9 +5,15 @@ security:
   key_derivation_iterations: 100000
   
   # Authentication settings
-  require_auth: false
-  auth_method: pin
-  pin_length: 4
+  require_auth: true
+  auth_method: token
+  api_token: "aura-v3-secure-token-change-in-production"
+  localhost_only: true
+  rate_limit_requests: 30
+  rate_limit_window: 60
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
   max_failed_attempts: 5
   lockout_duration_minutes: 15
   
@@ -21,8 +27,8 @@ security:
   biometric_type: fingerprint
   
   # Privacy warnings
-  warn_if_no_auth: true
-  
+  warn_if_no_auth: false
+
 # Storage path for security data
 storage_path: data/security
 

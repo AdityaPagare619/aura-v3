@@ -172,16 +172,110 @@ class ProactiveLifeExplorer:
             await asyncio.sleep(300)  # Check every 5 minutes
 
     async def _explore_life_aspects(self):
-        """Explore and learn about user's life aspects"""
-        # Implementation would explore and learn
-        pass
+        """Explore and learn about user's life aspects - PROACTIVE monitoring"""
+        
+        # 1. Check event tracker for productivity insights
+        if self.event_tracker:
+            try:
+                upcoming = await self.event_tracker.get_upcoming_events(hours=24)
+                summary = await self.event_tracker.get_daily_summary()
+                
+                # Detect patterns
+                if summary.get('missed', 0) > 2:
+                    logger.info('PROACTIVE: Multiple missed events detected - offering help')
+                    await self._offer_assistance('productivity', 'missed_events')
+                    
+                if summary.get('completion_rate', 1) < 0.5:
+                    logger.info('PROACTIVE: Low completion rate - suggesting focus')
+                    await self._offer_assistance('productivity', 'low_completion')
+            except Exception as e:
+                logger.warning(f'Error exploring event tracker: {e}')
+        
+        # 2. Check call manager for social insights
+        if self.call_manager:
+            try:
+                # Analyze recent calls for relationship patterns
+                # This would trigger if someone important hasn't been contacted
+                pass
+            except Exception as e:
+                logger.warning(f'Error exploring call manager: {e}')
+        
+        # 3. Check neural memory for life pattern insights
+        if self.neural_memory:
+            try:
+                # Look for patterns in recent activities
+                neurons = await self.neural_memory.recall(
+                    query='exercise health workout',
+                    memory_types=['episodic'],
+                    limit=5
+                )
+                
+                if neurons and len(neurons) < 2:
+                    # Low exercise frequency detected
+                    logger.info('PROACTIVE: Low exercise detected - offering suggestion')
+                    await self._offer_assistance('health', 'low_activity')
+            except Exception as e:
+                logger.warning(f'Error exploring neural memory: {e}')
+        
+        # 4. Update life aspects based on findings
+        await self._update_life_aspects()
+        
+    async def _offer_assistance(self, domain: str, issue: str):
+        """Offer proactive assistance for detected issues"""
+        
+        if hasattr(self, 'proactive_engine') and self.proactive_engine:
+            await self.proactive_engine.trigger_action(
+                action_type='life_explorer_assistance',
+                data={
+                    'domain': domain,
+                    'issue': issue,
+                    'timestamp': datetime.now().isoformat(),
+                }
+            )
+            
+    async def _update_life_aspects(self):
+        """Update tracked life aspects based on recent data"""
+        
+        # This would update the life_aspects dictionary with current state
+        # For now, just log that we're tracking
+        logger.debug('Updating life aspects from exploration')
 
     _running = False
     _exploration_task = None
 
     async def _load_life_aspects_from_memory(self):
         """Load life aspects from neural memory"""
-        pass
+        if not self.neural_memory:
+            return
+            
+        try:
+            # Load life aspect data
+            neurons = await self.neural_memory.recall(
+                query='life_aspect',
+                memory_types=['semantic'],
+                limit=20
+            )
+            
+            for neuron in neurons:
+                if hasattr(neuron, 'metadata') and neuron.metadata:
+                    aspect_data = neuron.metadata.get('aspect_data')
+                    if aspect_data:
+                        domain = aspect_data.get('domain')
+                        if domain:
+                            # Reconstruct LifeAspect
+                            aspect = LifeAspect(
+                                domain=LifeDomain[domain],
+                                name=aspect_data.get('name', 'Unknown'),
+                                current_state=aspect_data.get('current_state', {}),
+                                target_state=aspect_data.get('target_state', {}),
+                                importance=aspect_data.get('importance', 0.5),
+                                last_updated=datetime.now(),
+                            )
+                            self.life_aspects[f"{domain}_{aspect.name}"] = aspect
+                            
+            logger.info(f'Loaded {len(self.life_aspects)} life aspects from memory')
+        except Exception as e:
+            logger.warning(f'Could not load life aspects: {e}')
 
     def _init_domain_ownership(self):
         """Initialize which agent owns which domain"""

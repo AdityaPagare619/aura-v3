@@ -12,6 +12,7 @@ Key differences from OpenClaw:
 """
 
 import asyncio
+import shlex
 import logging
 import os
 import subprocess
@@ -287,14 +288,17 @@ class TermuxBridge:
 
         try:
             if isinstance(command, list):
+                # Safe: list args directly to exec
                 process = await asyncio.create_subprocess_exec(
                     *command,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
             else:
-                process = await asyncio.create_subprocess_shell(
-                    command,
+                # SECURED: Parse string command into list to avoid shell injection
+                cmd_list = shlex.split(command)
+                process = await asyncio.create_subprocess_exec(
+                    *cmd_list,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )

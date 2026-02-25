@@ -26,16 +26,41 @@ class TTSBackend(Enum):
     PIPER = "piper"
     EDGE_TTS = "edge_tts"
     GOOGLE_TTS = "google_tts"
-    PYTTSX3 = "pyttsx3"
+    PYTTSX3 = "pyttsx3"  # Offline, cross-platform
+    ESPEAK = "espeak"    # Lightweight, mobile-friendly
     BARK = "bark"
     SPEECH_T5 = "speech_t5"
+    MOCK = "mock"  # Fallback
+
+
+def get_default_tts_backend() -> TTSBackend:
+    """Get best available offline TTS backend"""
+    try:
+        import pyttsx3
+        return TTSBackend.PYTTSX3
+    except ImportError:
+        pass
+    
+    try:
+        import espeak
+        return TTSBackend.ESPEAK
+    except ImportError:
+        pass
+    
+    try:
+        import edge_tts
+        return TTSBackend.EDGE_TTS
+    except ImportError:
+        pass
+    
+    return TTSBackend.MOCK
 
 
 @dataclass
 class TTSConfig:
     """TTS Configuration"""
 
-    backend: TTSBackend = TTSBackend.COQUI
+    backend: TTSBackend = TTSBackend.PYTTSX3
     model_name: str = "en_US-lessac-medium"
     model_path: Optional[str] = None
     voice_id: str = "en_US-JennyNeural"
@@ -61,7 +86,7 @@ class TTSResult:
     duration: float = 0.0
     text_length: int = 0
     processing_time: float = 0.0
-    backend: TTSBackend = TTSBackend.COQUI
+    backend: TTSBackend = TTSBackend.PYTTSX3
     error: Optional[str] = None
 
 
@@ -587,6 +612,132 @@ class PyTTSx3Engine(TTSEngineBase):
         return 22050  # PyTTSx3 default
 
 
+# Mock and Espeak TTS engines
+# =============================================================================
+
+class MockTTSEngine(TTSEngineBase):
+    """Mock TTS engine for fallback"""
+    
+    def __init__(self):
+        self.config = None
+        
+    async def load_model(self, config: TTSConfig) -> bool:
+        self.config = config
+        return True
+        
+    async def speak(
+        self,
+        text: str,
+        blocking: bool = False,
+        callback: Optional[Callable[[bytes], None]] = None,
+    ) -> TTSResult:
+        return TTSResult(audio_data=b"", duration=0.0, text_length=len(text), backend=TTSBackend.MOCK)
+    
+    async def stream_synthesize(self, text: str) -> AsyncIterator[bytes]:
+        yield b""
+        
+    def is_loaded(self) -> bool:
+        return True
+        
+    def interrupt(self) -> None:
+        pass
+        
+    def unload(self) -> None:
+        pass
+    
+    @property
+    def sample_rate(self) -> int:
+        return 22050
+
+
+class EspeakTTSEngine(TTSEngineBase):
+    """Espeak TTS engine - lightweight, mobile-friendly, offline"""
+
+    def __init__(self):
+        self.config = None
+        self._is_speaking = False
+        self._interrupt_event = asyncio.Event()
+
+    async def load_model(self, config: TTSConfig) -> bool:
+        self.config = config
+        try:
+            import subprocess
+            result = subprocess.run(["espeak", "--version"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                logger.info("Espeak TTS initialized")
+                return True
+        except Exception as e:
+            logger.error(f"Espeak not available: {e}")
+        return False
+
+    async def speak(
+        self,
+        text: str,
+        blocking: bool = False,
+        callback: Optional[Callable[[bytes], None]] = None,
+    ) -> TTSResult:
+        try:
+            import subprocess
+            import tempfile
+
+            start_time = time.perf_counter()
+
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                output_path = f.name
+
+            def _speak():
+                return subprocess.run(
+                    ["espeak", "-w", output_path, text],
+                    capture_output=True, timeout=30
+                )
+
+            result = await asyncio.to_thread(_speak)
+
+            if result.returncode != 0:
+                return TTSResult(error=f"Espeak error: {result.stderr.decode()}")
+
+            with open(output_path, "rb") as f:
+                audio_data = f.read()
+
+            os.unlink(output_path)
+
+            processing_time = time.perf_counter() - start_time
+            duration = len(audio_data) / (self.sample_rate * 2)
+
+            if callback:
+                callback(audio_data)
+
+            return TTSResult(
+                audio_data=audio_data,
+                duration=duration,
+                text_length=len(text),
+                processing_time=processing_time,
+                backend=TTSBackend.ESPEAK,
+            )
+
+        except Exception as e:
+            logger.error(f"Espeak TTS error: {e}")
+            return TTSResult(error=str(e))
+
+    async def stream_synthesize(self, text: str) -> AsyncIterator[bytes]:
+        result = await self.speak(text)
+        if result.audio_data:
+            yield result.audio_data
+
+    def is_loaded(self) -> bool:
+        return True
+
+    def interrupt(self) -> None:
+        self._interrupt_event.set()
+
+    def unload(self) -> None:
+        pass
+
+    @property
+    def sample_rate(self) -> int:
+        return 22050
+
+
 class TTSQueueManager:
     """Manages TTS queue for sequential and priority speech"""
 
@@ -731,8 +882,15 @@ class TTSEngine:
             return EdgeTTSEngine()
         elif self.config.backend == TTSBackend.PYTTSX3:
             return PyTTSx3Engine()
+        elif self.config.backend == TTSBackend.ESPEAK:
+            return EspeakTTSEngine()
+        elif self.config.backend == TTSBackend.MOCK:
+            return MockTTSEngine()
         else:
-            return CoquiTTSEngine()  # Default
+            default = get_default_tts_backend()
+            logger.info(f"Backend {self.config.backend} not available, using {default}")
+            self.config.backend = default
+            return self._create_engine()
 
     async def initialize(self) -> bool:
         """Initialize the TTS engine"""

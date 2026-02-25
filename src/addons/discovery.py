@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import subprocess
+import shlex
 import yaml
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -417,12 +418,13 @@ class AppDiscovery:
             return {"success": False, "error": str(e)}
 
     async def _execute_termux_command(self, command: str, args: str) -> str:
-        """Execute a Termux command"""
-        full_cmd = f"{command} {args}"
+        """Execute a Termux command - SECURED: uses list args instead of shell=True"""
+        # FIXED: Use list args to avoid shell injection
+        cmd_list = [command] + shlex.split(args) if args else [command]
 
         try:
             result = subprocess.run(
-                full_cmd, shell=True, capture_output=True, text=True, timeout=30
+                cmd_list, shell=False, capture_output=True, text=True, timeout=30
             )
             return result.stdout if result.returncode == 0 else result.stderr
         except subprocess.TimeoutExpired:

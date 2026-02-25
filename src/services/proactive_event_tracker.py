@@ -180,21 +180,101 @@ class ProactiveEventTracker:
             await asyncio.sleep(60)  # Check every minute
 
     async def _check_upcoming_events(self):
-        """Check for events that need reminders"""
-        # Implementation would check upcoming events and send reminders
-        pass
+        """Check for events that need reminders and trigger them proactively"""
+        now = datetime.now()
+        
+        for event in self.events.values():
+            if event.reminder_sent or event.is_completed or event.is_cancelled:
+                continue
+            
+            # Check if we should send a reminder
+            if event.reminder_time and now >= event.reminder_time:
+                minutes_until = (event.event_time - now).total_seconds() / 60
+                
+                # Only remind for future or very recently past events (within 30 min)
+                if minutes_until > -30:
+                    event.reminder_sent = True
+                    self.reminders_sent += 1
+                    
+                    logger.info(f'PROACTIVE: Reminder for {event.title} in {int(minutes_until)} minutes')
+                    
+                    # Trigger proactive action if we have a proactive engine
+                    if hasattr(self, 'proactive_engine') and self.proactive_engine:
+                        await self.proactive_engine.trigger_action(
+                            action_type='event_reminder',
+                            data={
+                                'event_id': event.id,
+                                'title': event.title,
+                                'event_time': event.event_time.isoformat(),
+                                'minutes_until': int(minutes_until),
+                                'priority': event.priority.name,
+                                'location': event.location,
+                                'participants': event.participants,
+                            }
+                        )
 
     async def _check_overdue_followups(self):
-        """Check for events that need follow-up"""
-        # Implementation would check for missed follow-ups
-        pass
+        """Check for completed events that need follow-up or missed events"""
+        now = datetime.now()
+        
+        # Check for missed events (past time and not completed)
+        for event in self.events.values():
+            if event.is_completed or event.is_cancelled:
+                continue
+                
+            # Event is overdue (past event_time by more than 15 minutes)
+            if event.event_time < now - timedelta(minutes=15):
+                logger.info(f'PROACTIVE: Detected overdue event: {event.title}')
+                
+                # Could trigger follow-up offer
+                if hasattr(self, 'proactive_engine') and self.proactive_engine:
+                    await self.proactive_engine.trigger_action(
+                        action_type='overdue_followup',
+                        data={
+                            'event_id': event.id,
+                            'title': event.title,
+                            'event_time': event.event_time.isoformat(),
+                            'minutes_late': int((now - event.event_time).total_seconds() / 60),
+                            'priority': event.priority.name,
+                        }
+                    )
 
     _running = False
     _monitor_task = None
 
     async def _load_events_from_memory(self):
         """Load tracked events from neural memory"""
-        pass
+        if not self.neural_memory:
+            return
+            
+        try:
+            # Load events from episodic memory
+            neurons = await self.neural_memory.recall(
+                query='tracked_event',
+                memory_types=['episodic'],
+                limit=50
+            )
+            
+            for neuron in neurons:
+                # Parse stored event data
+                if hasattr(neuron, 'metadata') and neuron.metadata:
+                    event_data = neuron.metadata.get('event_data')
+                    if event_data:
+                        # Reconstruct event
+                        event = TrackedEvent(
+                            id=event_data.get('id', f'evt_{neuron.timestamp}'),
+                            title=event_data.get('title', 'Unknown Event'),
+                            description=event_data.get('description', ''),
+                            event_time=datetime.fromisoformat(event_data.get('event_time', datetime.now().isoformat())),
+                            priority=EventPriority[event_data.get('priority', 'MEDIUM')],
+                            source=EventSource.NEURAL_PATTERN,
+                            is_completed=event_data.get('is_completed', False),
+                        )
+                        self.events[event.id] = event
+                        
+            logger.info(f'Loaded {len(self.events)} events from neural memory')
+        except Exception as e:
+            logger.warning(f'Could not load events from memory: {e}')
 
     # =========================================================================
     # AUTO-DETECTION (The "Proactive" Part)
