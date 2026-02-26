@@ -18,6 +18,13 @@ from src.utils.error_recovery import (
     ErrorCategory,
     ErrorSeverity,
 )
+from src.utils.db_pool import (
+    get_connection,
+    connection,
+    close_all,
+    close_connection,
+    get_pool_stats,
+)
 
 __all__ = [
     "HealthMonitor",
@@ -34,4 +41,9 @@ __all__ = [
     "ErrorClassifier",
     "ErrorCategory",
     "ErrorSeverity",
+    "get_connection",
+    "connection",
+    "close_all",
+    "close_connection",
+    "get_pool_stats",
 ]

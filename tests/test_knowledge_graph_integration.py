@@ -93,7 +93,9 @@ class TestKnowledgeGraphToolBindingIntegration(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        from src.utils.db_pool import close_all
 
+        close_all()
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 

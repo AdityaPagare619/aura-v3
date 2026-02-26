@@ -4,7 +4,6 @@ Memory-efficient vector storage for RAG with local embedding generation
 Optimized for Android/Termux (4GB RAM constraint)
 """
 
-import sqlite3
 import json
 import logging
 import hashlib
@@ -15,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass, field
 from collections import defaultdict
 import numpy as np
+from src.utils.db_pool import get_connection, connection as db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -227,40 +227,40 @@ class LocalVectorStore:
         self.quantizer = QuantizedVectorStore()
 
         self._init_db()
-        self._init_quantizer()
+        self._quantizer_initialized = False
+        self._vectors_loaded = False
 
     def _init_db(self):
         """Initialize SQLite database"""
-        import os
+        with db_connection(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS vectors (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    vector BLOB,
+                    metadata TEXT,
+                    created_at REAL,
+                    access_count INTEGER DEFAULT 0,
+                    importance REAL DEFAULT 0.5
+                )
+            """)
 
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_vectors_created 
+                ON vectors(created_at DESC)
+            """)
 
-        conn = sqlite3.connect(self.db_path)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_vectors_importance 
+                ON vectors(importance DESC)
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS vectors (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                vector BLOB,
-                metadata TEXT,
-                created_at REAL,
-                access_count INTEGER DEFAULT 0,
-                importance REAL DEFAULT 0.5
-            )
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_vectors_created 
-            ON vectors(created_at DESC)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_vectors_importance 
-            ON vectors(importance DESC)
-        """)
-
-        conn.commit()
-        conn.close()
+    def _ensure_quantizer(self):
+        """Lazily initialize quantizer on first search"""
+        if self._quantizer_initialized:
+            return
+        self._quantizer_initialized = True
+        self._init_quantizer()
 
     def _init_quantizer(self):
         """Initialize quantizer with existing vectors"""
@@ -281,7 +281,10 @@ class LocalVectorStore:
 
     def _load_all_vectors(self) -> List[VectorEntry]:
         """Load all vectors for quantizer training"""
-        conn = sqlite3.connect(self.db_path)
+        if self._vectors_loaded:
+            return self._cached_vectors
+
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             "SELECT id, vector, content, metadata, created_at, access_count, importance FROM vectors LIMIT 1000"
         )
@@ -308,7 +311,8 @@ class LocalVectorStore:
                 )
             )
 
-        conn.close()
+        self._cached_vectors = results
+        self._vectors_loaded = True
         return results
 
     def add(
@@ -319,8 +323,6 @@ class LocalVectorStore:
         vector: List[float] = None,
     ) -> VectorEntry:
         """Add a vector entry"""
-        import os
-
         vector_id = f"vec_{hashlib.md5(content.encode()).hexdigest()[:12]}"
 
         if vector is None:
@@ -337,38 +339,32 @@ class LocalVectorStore:
             importance=importance,
         )
 
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO vectors 
+                   (id, content, vector, metadata, created_at, access_count, importance)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    entry.id,
+                    entry.content,
+                    vector_bytes,
+                    json.dumps(entry.metadata),
+                    entry.created_at,
+                    entry.access_count,
+                    entry.importance,
+                ),
+            )
 
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
+            count = conn.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
+            if count > self.max_vectors:
                 conn.execute(
-                    """INSERT OR REPLACE INTO vectors 
-                       (id, content, vector, metadata, created_at, access_count, importance)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        entry.id,
-                        entry.content,
-                        vector_bytes,
-                        json.dumps(entry.metadata),
-                        entry.created_at,
-                        entry.access_count,
-                        entry.importance,
-                    ),
+                    """DELETE FROM vectors WHERE id IN (
+                       SELECT id FROM vectors 
+                       ORDER BY importance ASC, access_count ASC, created_at ASC
+                       LIMIT ?
+                    )""",
+                    (count - self.max_vectors,),
                 )
-
-                count = conn.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
-                if count > self.max_vectors:
-                    conn.execute(
-                        """DELETE FROM vectors WHERE id IN (
-                           SELECT id FROM vectors 
-                           ORDER BY importance ASC, access_count ASC, created_at ASC
-                           LIMIT ?
-                        )""",
-                        (count - self.max_vectors,),
-                    )
-        finally:
-            conn.close()
 
         return entry
 
@@ -398,6 +394,8 @@ class LocalVectorStore:
         """Search by vector"""
         import numpy as np
 
+        self._ensure_quantizer()
+
         if not query_vector:
             return []
 
@@ -407,68 +405,64 @@ class LocalVectorStore:
         if query_norm > 0:
             query = query / query_norm
 
-        conn = sqlite3.connect(self.db_path)
+        with db_connection(self.db_path) as conn:
+            filter_clause = ""
+            params = []
+            if filter_metadata:
+                for key in filter_metadata:
+                    filter_clause += f" AND metadata LIKE ?"
+                    params.append(f'%"{key}":%')
 
-        filter_clause = ""
-        params = []
-        if filter_metadata:
-            for key in filter_metadata:
-                filter_clause += f" AND metadata LIKE ?"
-                params.append(f'%"{key}":%')
+            cursor = conn.execute(
+                f"""SELECT id, content, vector, metadata, importance, access_count
+                    FROM vectors 
+                    WHERE 1=1 {filter_clause}
+                    ORDER BY importance DESC
+                    LIMIT ?""",
+                params + [top_k * 3],
+            )
 
-        cursor = conn.execute(
-            f"""SELECT id, content, vector, metadata, importance, access_count
-                FROM vectors 
-                WHERE 1=1 {filter_clause}
-                ORDER BY importance DESC
-                LIMIT ?""",
-            params + [top_k * 3],
-        )
+            results = []
+            for row in cursor.fetchall():
+                vector_data = row[2]
+                if not vector_data:
+                    continue
 
-        results = []
-        for row in cursor.fetchall():
-            vector_data = row[2]
-            if not vector_data:
-                continue
+                vector = np.frombuffer(vector_data, dtype=np.float32)
 
-            vector = np.frombuffer(vector_data, dtype=np.float32)
+                if self.use_quantization and self.quantizer._initialized:
+                    codes = self.quantizer.quantize(vector)
+                    vector = self.quantizer.dequantize(codes)
 
-            if self.use_quantization and self.quantizer._initialized:
-                codes = self.quantizer.quantize(vector)
-                vector = self.quantizer.dequantize(codes)
+                vector_norm = np.linalg.norm(vector)
+                if vector_norm == 0:
+                    continue
 
-            vector_norm = np.linalg.norm(vector)
-            if vector_norm == 0:
-                continue
+                vector = vector / vector_norm
 
-            vector = vector / vector_norm
+                similarity = np.dot(query, vector)
 
-            similarity = np.dot(query, vector)
-
-            if similarity >= min_score:
-                results.append(
-                    SearchResult(
-                        id=row[0],
-                        content=row[1],
-                        score=float(similarity),
-                        metadata=json.loads(row[3]) if row[3] else {},
+                if similarity >= min_score:
+                    results.append(
+                        SearchResult(
+                            id=row[0],
+                            content=row[1],
+                            score=float(similarity),
+                            metadata=json.loads(row[3]) if row[3] else {},
+                        )
                     )
-                )
 
-                conn.execute(
-                    "UPDATE vectors SET access_count = access_count + 1 WHERE id = ?",
-                    (row[0],),
-                )
-
-        conn.commit()
-        conn.close()
+                    conn.execute(
+                        "UPDATE vectors SET access_count = access_count + 1 WHERE id = ?",
+                        (row[0],),
+                    )
 
         results.sort(key=lambda x: x.score, reverse=True)
         return results[:top_k]
 
     def get(self, vector_id: str) -> Optional[VectorEntry]:
         """Get a vector by ID"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             """SELECT id, vector, content, metadata, created_at, access_count, importance
                FROM vectors WHERE id = ?""",
@@ -476,7 +470,6 @@ class LocalVectorStore:
         )
 
         row = cursor.fetchone()
-        conn.close()
 
         if row:
             vector_data = row[1]
@@ -500,18 +493,15 @@ class LocalVectorStore:
 
     def delete(self, vector_id: str) -> bool:
         """Delete a vector"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute("DELETE FROM vectors WHERE id = ?", (vector_id,))
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM vectors WHERE id = ?", (vector_id,))
 
         return cursor.rowcount > 0
 
     def update_metadata(self, vector_id: str, metadata: Dict[str, Any]) -> bool:
         """Update vector metadata"""
-        conn = sqlite3.connect(self.db_path)
         try:
-            with conn:
+            with db_connection(self.db_path) as conn:
                 conn.execute(
                     "UPDATE vectors SET metadata = ? WHERE id = ?",
                     (json.dumps(metadata), vector_id),
@@ -519,8 +509,6 @@ class LocalVectorStore:
             return True
         except Exception:
             return False
-        finally:
-            conn.close()
 
     def get_similar_by_id(
         self,
@@ -549,15 +537,13 @@ class LocalVectorStore:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get vector store statistics"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         cursor = conn.execute("""
             SELECT COUNT(*), AVG(importance), SUM(access_count), MAX(created_at)
             FROM vectors
         """)
         row = cursor.fetchone()
-
-        conn.close()
 
         return {
             "total_vectors": row[0] or 0,
@@ -574,9 +560,8 @@ class LocalVectorStore:
 
     def vacuum(self):
         """Vacuum database to reclaim space"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("VACUUM")
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute("VACUUM")
 
 
 def get_vector_store(

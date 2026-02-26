@@ -226,19 +226,26 @@ class BackgroundResourceManager:
     # =========================================================================
 
     async def _update_resource_state(self):
-        """Update current resource usage"""
+        """Update current resource usage (non-blocking)"""
         try:
-            self._cpu_usage = psutil.cpu_percent(interval=0.5)
-            vm = psutil.virtual_memory()
-            self._memory_usage = vm.percent
+            loop = asyncio.get_event_loop()
 
-            # Try to get battery (may not work on all devices)
-            try:
-                battery = psutil.sensors_battery()
-                if battery:
-                    self._battery_level = battery.percent
-            except Exception:
-                self._battery_level = None
+            # Batch all psutil calls into a single executor call to avoid
+            # blocking the asyncio event loop (psutil I/O can take 100ms+)
+            def _read_system_stats():
+                cpu = psutil.cpu_percent(interval=0.5)
+                vm = psutil.virtual_memory()
+                try:
+                    battery = psutil.sensors_battery()
+                except Exception:
+                    battery = None
+                return cpu, vm, battery
+
+            cpu, vm, battery = await loop.run_in_executor(None, _read_system_stats)
+
+            self._cpu_usage = cpu
+            self._memory_usage = vm.percent
+            self._battery_level = battery.percent if battery else None
 
         except Exception as e:
             logger.error(f"Error updating resource state: {e}")

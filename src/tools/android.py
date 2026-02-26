@@ -1,13 +1,12 @@
 import asyncio
 import json
 import logging
-import os
-import sqlite3
 import subprocess
 import shlex
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
+
+from src.utils.db_pool import get_connection, connection as db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -31,63 +30,57 @@ class AppExplorationMemory:
 
     def __init__(self, db_path: str = "data/memories/app_exploration.db"):
         self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _init_db(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS app_structures (
-                app_name TEXT PRIMARY KEY,
-                package TEXT,
-                screen_size TEXT,
-                elements TEXT,
-                last_updated TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS element_positions (
-                app_name TEXT,
-                element_desc TEXT,
-                x INTEGER,
-                y INTEGER,
-                last_updated TEXT,
-                PRIMARY KEY (app_name, element_desc)
-            )
-        """)
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS app_structures (
+                    app_name TEXT PRIMARY KEY,
+                    package TEXT,
+                    screen_size TEXT,
+                    elements TEXT,
+                    last_updated TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS element_positions (
+                    app_name TEXT,
+                    element_desc TEXT,
+                    x INTEGER,
+                    y INTEGER,
+                    last_updated TEXT,
+                    PRIMARY KEY (app_name, element_desc)
+                )
+            """)
 
     def save_app_structure(self, app_name: str, structure: Dict):
         from datetime import datetime
 
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO app_structures 
-            (app_name, package, screen_size, elements, last_updated)
-            VALUES (?, ?, ?, ?, ?)
-        """,
-            (
-                app_name,
-                structure.get("package", ""),
-                json.dumps(structure.get("screen_size", {})),
-                json.dumps(structure.get("elements", {})),
-                datetime.now().isoformat(),
-            ),
-        )
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO app_structures 
+                (app_name, package, screen_size, elements, last_updated)
+                VALUES (?, ?, ?, ?, ?)
+            """,
+                (
+                    app_name,
+                    structure.get("package", ""),
+                    json.dumps(structure.get("screen_size", {})),
+                    json.dumps(structure.get("elements", {})),
+                    datetime.now().isoformat(),
+                ),
+            )
         logger.info(f"Saved app structure for: {app_name}")
 
     def get_app_structure(self, app_name: str) -> Optional[Dict]:
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             "SELECT package, screen_size, elements FROM app_structures WHERE app_name = ?",
             (app_name,),
         )
         row = cursor.fetchone()
-        conn.close()
 
         if row:
             return {
@@ -102,56 +95,57 @@ class AppExplorationMemory:
     ):
         from datetime import datetime
 
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO element_positions 
-            (app_name, element_desc, x, y, last_updated)
-            VALUES (?, ?, ?, ?, ?)
-        """,
-            (app_name, element_desc, coords[0], coords[1], datetime.now().isoformat()),
-        )
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO element_positions 
+                (app_name, element_desc, x, y, last_updated)
+                VALUES (?, ?, ?, ?, ?)
+            """,
+                (
+                    app_name,
+                    element_desc,
+                    coords[0],
+                    coords[1],
+                    datetime.now().isoformat(),
+                ),
+            )
 
     def get_element_position(
         self, app_name: str, element_desc: str
     ) -> Optional[Tuple[int, int]]:
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             "SELECT x, y FROM element_positions WHERE app_name = ? AND element_desc = ?",
             (app_name, element_desc),
         )
         row = cursor.fetchone()
-        conn.close()
 
         if row:
             return (row[0], row[1])
         return None
 
     def list_cached_apps(self) -> List[str]:
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute("SELECT app_name FROM app_structures")
         apps = [row[0] for row in cursor.fetchall()]
-        conn.close()
         return apps
 
     def delete_app_structure(self, app_name: str):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("DELETE FROM app_structures WHERE app_name = ?", (app_name,))
-        conn.execute("DELETE FROM element_positions WHERE app_name = ?", (app_name,))
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute("DELETE FROM app_structures WHERE app_name = ?", (app_name,))
+            conn.execute(
+                "DELETE FROM element_positions WHERE app_name = ?", (app_name,)
+            )
         logger.info(f"Deleted app structure for: {app_name}")
 
     def get_all_element_positions(self, app_name: str) -> Dict[str, Tuple[int, int]]:
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             "SELECT element_desc, x, y FROM element_positions WHERE app_name = ?",
             (app_name,),
         )
         positions = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}
-        conn.close()
         return positions
 
 
@@ -170,7 +164,7 @@ class AndroidShell:
             process = await asyncio.create_subprocess_exec(
                 *cmd_list,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
             )
             try:
                 stdout, stderr = await asyncio.wait_for(

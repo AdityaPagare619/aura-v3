@@ -37,6 +37,9 @@ class AuraProduction:
         self.config_path = config_path
         self._initialized = False
         self._running = False
+        self._tier1_loaded = False
+        self._tier2_loaded = False
+        self._tier2_task: Optional[asyncio.Task] = None
 
         # Core - THE BRAIN (LLM + Memory + Processing)
         self._agent_loop = None
@@ -127,72 +130,122 @@ class AuraProduction:
         }
 
     async def initialize(self):
-        """Initialize all services in proper order"""
+        """Initialize Tier 0 services — minimum needed for AURA to be alive.
+
+        Tier 0 (boot): LLM, agent loop, memory, tools, security, utils (~30-50 MB)
+        Tier 1 (first query): Context, personality, neural systems, session, learning
+        Tier 2 (background): Proactive services, social life, healthcare, mobile UI
+
+        All features remain available — they're just loaded when needed instead of
+        all at boot. AURA is just as powerful, it just starts faster.
+        """
         if self._initialized:
             logger.warning("AURA already initialized")
             return
 
-        logger.info("Initializing AURA v3...")
+        logger.info("Initializing AURA v3 (Tier 0 — core brain)...")
 
         try:
-            # Phase 0: Core Brain (LLM + Memory)
+            # Tier 0: Core Brain (LLM + Memory + Agent)
             await self._init_brain()
 
-            # Phase 0.05: Execution Control (Stop/Kill System)
+            # Tier 0: Execution Control (Stop/Kill System)
             await self._init_execution_control()
 
-            # Phase 0.1: Tools (depends on brain/agent)
+            # Tier 0: Tools (agent needs tools to respond)
             await self._init_tools()
 
-            # Phase 0.5: Core Processing Engine (before everything)
-            await self._init_core_engine()
-
-            # Phase 0.6: Neural Systems (AURA-Native solutions)
-            await self._init_neural_systems()
-
-            # Phase 0.75: Security (before network/services)
+            # Tier 0: Security (must be before any network/services)
             await self._init_security()
 
-            # Phase 1: Core utilities (no dependencies)
+            # Tier 0: Core utilities (error recovery, shutdown)
             await self._init_utils()
 
-            # Phase 2: Context & Session (foundational services)
-            await self._init_context()
-            await self._init_session()
-
-            # Phase 3: Learning (depends on context)
-            await self._init_learning()
-
-            # Phase 4: Core services (utilities + context)
-            await self._init_core_services()
-
-            # Phase 5: Intelligence services (core)
-            await self._init_intelligence()
-
-            # Phase 5.5: NEW - Proactive Services (AURA-Native)
-            await self._init_proactive_services()
-
-            # Phase 6: NEW - Addons (depends on core)
-            await self._init_addons()
-
-            # Phase 7: NEW - Social-Life Manager
-            await self._init_social_life()
-
-            # Phase 7.5: NEW - Healthcare Agent
-            await self._init_healthcare()
-
-            # Phase 7.6: NEW - Inner Voice System
-            await self._init_inner_voice()
-
-            # Phase 8: UI/Interface services (intelligence)
-            await self._init_interface()
-
             self._initialized = True
-            logger.info("AURA v3 initialized successfully")
+            logger.info(
+                "AURA v3 Tier 0 initialized (brain + tools + security). "
+                "Tier 1 loads on first query, Tier 2 loads in background."
+            )
 
         except Exception as e:
-            logger.error(f"Initialization failed: {e}")
+            logger.error(f"Tier 0 initialization failed: {e}")
             raise
+
+    async def _ensure_tier1(self):
+        """Load Tier 1 systems on first query — context, personality, neural systems.
+
+        Idempotent: safe to call multiple times, only loads once.
+        """
+        if self._tier1_loaded:
+            return
+
+        logger.info("Loading Tier 1 (personalization + context)...")
+
+        try:
+            # Core Processing Engine (neuromorphic, personality, user profile, context)
+            await self._init_core_engine()
+
+            # Neural Systems (planner, hebbian, router, proactivity, orchestrator)
+            await self._init_neural_systems()
+
+            # Context provider start
+            await self._init_context()
+
+            # Session management
+            await self._init_session()
+
+            # Learning engine
+            await self._init_learning()
+
+            # Core services (adaptive context, life tracker, task context)
+            await self._init_core_services()
+
+            self._tier1_loaded = True
+            logger.info("Tier 1 loaded — AURA is now fully personalized")
+
+        except Exception as e:
+            logger.error(f"Tier 1 loading failed: {e}")
+            raise
+
+    async def _ensure_tier2(self):
+        """Load Tier 2 systems on demand — proactive, social, mobile UI.
+
+        Idempotent: safe to call multiple times, only loads once.
+        """
+        if self._tier2_loaded:
+            return
+
+        logger.info("Loading Tier 2 (proactive services + mobile UI)...")
+
+        try:
+            # Intelligence services (proactive engine, self learning)
+            await self._init_intelligence()
+
+            # Proactive services (event tracker, call manager, life explorer)
+            await self._init_proactive_services()
+
+            # Addons (discovery, termux, tool binding, mobile systems)
+            await self._init_addons()
+
+            # Social-Life Manager
+            await self._init_social_life()
+
+            # Healthcare Agent
+            await self._init_healthcare()
+
+            # Inner Voice System
+            await self._init_inner_voice()
+
+            # UI/Interface services (dashboard, background manager)
+            await self._init_interface()
+
+            self._tier2_loaded = True
+            logger.info("Tier 2 loaded — all AURA systems online")
+
+        except Exception as e:
+            logger.error(f"Tier 2 loading failed (non-fatal): {e}")
+            # Tier 2 failure is non-fatal — AURA can still respond
+            self._tier2_loaded = True  # Don't retry endlessly
 
     async def _init_brain(self):
         """Initialize the brain - LLM and memory"""
@@ -734,43 +787,77 @@ class AuraProduction:
         self._background_manager = BackgroundResourceManager()
 
     async def start(self):
-        """Start AURA"""
+        """Start AURA with tiered loading.
+
+        1. Ensure Tier 0 is initialized
+        2. Load Tier 1 (needed for first query)
+        3. Start Tier 0+1 services
+        4. Schedule Tier 2 loading in background
+        5. Create initial session
+        """
         if not self._initialized:
             await self.initialize()
 
         logger.info("Starting AURA v3...")
         self._running = True
 
-        # Start all services
+        # Ensure Tier 1 is loaded before starting services
+        await self._ensure_tier1()
+
+        # Start Tier 0+1 services
         await self._context_provider.start()
-        await self._context_engine.start()
-        await self._life_tracker.start()
-        await self._proactive_engine.start()
-        await self._dashboard.start()
-        await self._background_manager.start()
-        await self._health_monitor.start()
-
-        # Start proactive services (NEW!)
-        if self._proactive_event_tracker:
-            await self._proactive_event_tracker.start()
-        if self._intelligent_call_manager:
-            await self._intelligent_call_manager.start()
-        if self._proactive_life_explorer:
-            await self._proactive_life_explorer.start()
-
-        # Start Social-Life Manager
-        if self._social_life_agent:
-            await self._social_life_agent.start()
-
-        # Start Mobile Systems (background, non-blocking)
-        await self._start_mobile_systems()
+        if self._context_engine:
+            await self._context_engine.start()
+        if self._life_tracker:
+            await self._life_tracker.start()
+        if self._health_monitor:
+            await self._health_monitor.start()
 
         # Create initial session
         from src.session import SessionType
 
         self._session_manager.create_session(session_type=SessionType.INTERACTION)
 
-        logger.info("AURA v3 is now running!")
+        logger.info("AURA v3 is running (Tier 0+1). Loading Tier 2 in background...")
+
+        # Schedule Tier 2 loading + starting as background task
+        self._tier2_task = asyncio.create_task(self._load_and_start_tier2())
+
+    async def _load_and_start_tier2(self):
+        """Load and start Tier 2 systems in background.
+
+        Non-blocking: AURA can respond to queries while this runs.
+        """
+        try:
+            await self._ensure_tier2()
+
+            # Start Tier 2 services (only if they loaded successfully)
+            if self._proactive_engine:
+                await self._proactive_engine.start()
+            if self._dashboard:
+                await self._dashboard.start()
+            if self._background_manager:
+                await self._background_manager.start()
+
+            # Start proactive services
+            if self._proactive_event_tracker:
+                await self._proactive_event_tracker.start()
+            if self._intelligent_call_manager:
+                await self._intelligent_call_manager.start()
+            if self._proactive_life_explorer:
+                await self._proactive_life_explorer.start()
+
+            # Start Social-Life Manager
+            if self._social_life_agent:
+                await self._social_life_agent.start()
+
+            # Start Mobile Systems
+            await self._start_mobile_systems()
+
+            logger.info("All AURA systems fully operational")
+
+        except Exception as e:
+            logger.error(f"Tier 2 background loading failed (non-fatal): {e}")
 
     async def _start_mobile_systems(self):
         """Start all mobile systems in background (non-blocking)"""
@@ -798,6 +885,14 @@ class AuraProduction:
         """Stop AURA gracefully"""
         logger.info("Stopping AURA v3...")
         self._running = False
+
+        # Cancel Tier 2 background loading if still in progress
+        if self._tier2_task and not self._tier2_task.done():
+            self._tier2_task.cancel()
+            try:
+                await self._tier2_task
+            except asyncio.CancelledError:
+                logger.info("Tier 2 background loading cancelled")
 
         # End current session
         if self._session_manager:
@@ -846,6 +941,9 @@ class AuraProduction:
         """
         if not self._running:
             return "AURA is not running. Call start() first."
+
+        # Ensure Tier 1 is loaded (idempotent — no-op if already loaded)
+        await self._ensure_tier1()
 
         try:
             # Get current context for processing

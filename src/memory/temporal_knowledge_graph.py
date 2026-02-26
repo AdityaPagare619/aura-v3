@@ -3,7 +3,6 @@ Temporal Knowledge Graph - Graphiti-style Temporal Knowledge Graphs
 Knowledge graph with validity intervals for temporal reasoning
 """
 
-import sqlite3
 import json
 import logging
 import time
@@ -13,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from collections import defaultdict
+
+from src.utils.db_pool import get_connection, connection as db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -119,80 +120,72 @@ class TemporalKnowledgeGraph:
 
     def _init_db(self):
         """Initialize SQLite database"""
-        import os
+        with db_connection(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS entities (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    entity_type TEXT,
+                    properties TEXT,
+                    aliases TEXT,
+                    created_at REAL,
+                    last_accessed REAL,
+                    access_count INTEGER DEFAULT 0
+                )
+            """)
 
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS facts (
+                    id TEXT PRIMARY KEY,
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    object TEXT NOT NULL,
+                    valid_from REAL,
+                    valid_to REAL,
+                    confidence REAL DEFAULT 0.5,
+                    status TEXT DEFAULT 'active',
+                    source TEXT,
+                    evidence TEXT,
+                    created_at REAL,
+                    updated_at REAL,
+                    access_count INTEGER DEFAULT 0,
+                    metadata TEXT
+                )
+            """)
 
-        conn = sqlite3.connect(self.db_path)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS relations (
+                    id TEXT PRIMARY KEY,
+                    from_entity TEXT NOT NULL,
+                    to_entity TEXT NOT NULL,
+                    relation_type TEXT NOT NULL,
+                    valid_from REAL,
+                    valid_to REAL,
+                    properties TEXT,
+                    created_at REAL,
+                    UNIQUE(from_entity, to_entity, relation_type)
+                )
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS entities (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                entity_type TEXT,
-                properties TEXT,
-                aliases TEXT,
-                created_at REAL,
-                last_accessed REAL,
-                access_count INTEGER DEFAULT 0
-            )
-        """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_facts_subject 
+                ON facts(subject, predicate)
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS facts (
-                id TEXT PRIMARY KEY,
-                subject TEXT NOT NULL,
-                predicate TEXT NOT NULL,
-                object TEXT NOT NULL,
-                valid_from REAL,
-                valid_to REAL,
-                confidence REAL DEFAULT 0.5,
-                status TEXT DEFAULT 'active',
-                source TEXT,
-                evidence TEXT,
-                created_at REAL,
-                updated_at REAL,
-                access_count INTEGER DEFAULT 0,
-                metadata TEXT
-            )
-        """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_facts_validity 
+                ON facts(valid_from, valid_to)
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS relations (
-                id TEXT PRIMARY KEY,
-                from_entity TEXT NOT NULL,
-                to_entity TEXT NOT NULL,
-                relation_type TEXT NOT NULL,
-                valid_from REAL,
-                valid_to REAL,
-                properties TEXT,
-                created_at REAL,
-                UNIQUE(from_entity, to_entity, relation_type)
-            )
-        """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_entities_name 
+                ON entities(name)
+            """)
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_facts_subject 
-            ON facts(subject, predicate)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_facts_validity 
-            ON facts(valid_from, valid_to)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_entities_name 
-            ON entities(name)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_relations_entities 
-            ON relations(from_entity, to_entity)
-        """)
-
-        conn.commit()
-        conn.close()
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_relations_entities 
+                ON relations(from_entity, to_entity)
+            """)
 
     def add_entity(
         self,
@@ -210,26 +203,22 @@ class TemporalKnowledgeGraph:
             aliases=aliases or [],
         )
 
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    """INSERT OR REPLACE INTO entities 
-                       (id, name, entity_type, properties, aliases, created_at, last_accessed, access_count)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        entity.id,
-                        entity.name,
-                        entity.entity_type,
-                        json.dumps(entity.properties),
-                        json.dumps(entity.aliases),
-                        entity.created_at,
-                        entity.last_accessed,
-                        entity.access_count,
-                    ),
-                )
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO entities 
+                   (id, name, entity_type, properties, aliases, created_at, last_accessed, access_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    entity.id,
+                    entity.name,
+                    entity.entity_type,
+                    json.dumps(entity.properties),
+                    json.dumps(entity.aliases),
+                    entity.created_at,
+                    entity.last_accessed,
+                    entity.access_count,
+                ),
+            )
 
         for alias in entity.aliases:
             self._add_entity_alias(entity.id, alias)
@@ -238,19 +227,15 @@ class TemporalKnowledgeGraph:
 
     def _add_entity_alias(self, entity_id: str, alias: str):
         """Add alias for entity"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    "INSERT OR IGNORE INTO entities (id, name, entity_type, created_at, last_accessed) VALUES (?, ?, 'alias', ?, ?)",
-                    (entity_id, alias, time.time(), time.time()),
-                )
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO entities (id, name, entity_type, created_at, last_accessed) VALUES (?, ?, 'alias', ?, ?)",
+                (entity_id, alias, time.time(), time.time()),
+            )
 
     def get_entity(self, name: str) -> Optional[Entity]:
         """Get entity by name"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             """SELECT id, name, entity_type, properties, aliases, created_at, last_accessed, access_count
                FROM entities WHERE name = ? AND entity_type != 'alias'""",
@@ -258,7 +243,6 @@ class TemporalKnowledgeGraph:
         )
 
         row = cursor.fetchone()
-        conn.close()
 
         if row:
             return Entity(
@@ -306,33 +290,29 @@ class TemporalKnowledgeGraph:
 
         self._supersede_old_facts(subject, predicate, valid_from)
 
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    """INSERT INTO facts 
-                       (id, subject, predicate, object, valid_from, valid_to, confidence, 
-                        status, source, evidence, created_at, updated_at, access_count, metadata)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        fact.id,
-                        fact.subject,
-                        fact.predicate,
-                        fact.object,
-                        fact.valid_from,
-                        fact.valid_to,
-                        fact.confidence,
-                        fact.status.value,
-                        fact.source,
-                        json.dumps(fact.evidence),
-                        fact.created_at,
-                        fact.updated_at,
-                        fact.access_count,
-                        json.dumps(fact.metadata),
-                    ),
-                )
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """INSERT INTO facts 
+                   (id, subject, predicate, object, valid_from, valid_to, confidence, 
+                    status, source, evidence, created_at, updated_at, access_count, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    fact.id,
+                    fact.subject,
+                    fact.predicate,
+                    fact.object,
+                    fact.valid_from,
+                    fact.valid_to,
+                    fact.confidence,
+                    fact.status.value,
+                    fact.source,
+                    json.dumps(fact.evidence),
+                    fact.created_at,
+                    fact.updated_at,
+                    fact.access_count,
+                    json.dumps(fact.metadata),
+                ),
+            )
 
         self._ensure_entity_exists(subject)
         self._ensure_entity_exists(object)
@@ -341,18 +321,14 @@ class TemporalKnowledgeGraph:
 
     def _supersede_old_facts(self, subject: str, predicate: str, valid_from: float):
         """Mark old facts as superseded when new fact is added"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    """UPDATE facts 
-                       SET status = 'superseded', updated_at = ?
-                       WHERE subject = ? AND predicate = ? 
-                       AND status = 'active' AND valid_from < ?""",
-                    (time.time(), subject, predicate, valid_from),
-                )
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """UPDATE facts 
+                   SET status = 'superseded', updated_at = ?
+                   WHERE subject = ? AND predicate = ? 
+                   AND status = 'active' AND valid_from < ?""",
+                (time.time(), subject, predicate, valid_from),
+            )
 
     def _ensure_entity_exists(self, name: str):
         """Ensure entity exists in graph"""
@@ -365,7 +341,7 @@ class TemporalKnowledgeGraph:
         limit: int = 50,
     ) -> List[TemporalFact]:
         """Query facts with temporal conditions"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         conditions = ["1=1"]
         params = []
@@ -430,7 +406,6 @@ class TemporalKnowledgeGraph:
                 )
             )
 
-        conn.close()
         return results
 
     def what_was_true_at(
@@ -473,14 +448,13 @@ class TemporalKnowledgeGraph:
         confidence: float = None,
     ) -> Optional[TemporalFact]:
         """Update a fact (creates new version)"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             """SELECT subject, predicate FROM facts WHERE id = ?""", (fact_id,)
         )
         row = cursor.fetchone()
 
         if not row:
-            conn.close()
             return None
 
         subject, predicate = row[0], row[1]
@@ -492,32 +466,23 @@ class TemporalKnowledgeGraph:
             confidence=confidence or 0.5,
         )
 
-        conn.close()
         return new_fact
 
     def expire_fact(self, fact_id: str):
         """Manually expire a fact"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    """UPDATE facts SET status = 'expired', updated_at = ? WHERE id = ?""",
-                    (time.time(), fact_id),
-                )
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """UPDATE facts SET status = 'expired', updated_at = ? WHERE id = ?""",
+                (time.time(), fact_id),
+            )
 
     def validate_fact(self, fact_id: str):
         """Mark fact as validated"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    """UPDATE facts SET status = 'validated', updated_at = ? WHERE id = ?""",
-                    (time.time(), fact_id),
-                )
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """UPDATE facts SET status = 'validated', updated_at = ? WHERE id = ?""",
+                (time.time(), fact_id),
+            )
 
     def add_relation(
         self,
@@ -534,26 +499,22 @@ class TemporalKnowledgeGraph:
         self._ensure_entity_exists(from_entity)
         self._ensure_entity_exists(to_entity)
 
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    """INSERT OR REPLACE INTO relations
-                       (id, from_entity, to_entity, relation_type, valid_from, valid_to, properties, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        relation_id,
-                        from_entity,
-                        to_entity,
-                        relation_type.value,
-                        valid_from or time.time(),
-                        valid_to,
-                        json.dumps(properties or {}),
-                        time.time(),
-                    ),
-                )
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO relations
+                   (id, from_entity, to_entity, relation_type, valid_from, valid_to, properties, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    relation_id,
+                    from_entity,
+                    to_entity,
+                    relation_type.value,
+                    valid_from or time.time(),
+                    valid_to,
+                    json.dumps(properties or {}),
+                    time.time(),
+                ),
+            )
 
         return relation_id
 
@@ -563,7 +524,7 @@ class TemporalKnowledgeGraph:
         relation_type: RelationType = None,
     ) -> List[Dict[str, Any]]:
         """Get relations for an entity"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         conditions = []
         params = []
@@ -599,29 +560,26 @@ class TemporalKnowledgeGraph:
                 }
             )
 
-        conn.close()
         return results
 
     def cleanup_expired(self, older_than_days: int = 30) -> int:
         """Clean up expired facts"""
         cutoff = time.time() - (older_than_days * 86400)
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute(
-            "DELETE FROM facts WHERE valid_to IS NOT NULL AND valid_to < ? AND status IN ('expired', 'superseded')",
-            (cutoff,),
-        )
+        with db_connection(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM facts WHERE valid_to IS NOT NULL AND valid_to < ? AND status IN ('expired', 'superseded')",
+                (cutoff,),
+            )
 
-        deleted = cursor.rowcount
-        conn.commit()
-        conn.close()
+            deleted = cursor.rowcount
 
         logger.info(f"Cleaned up {deleted} expired facts")
         return deleted
 
     def get_stats(self) -> Dict[str, Any]:
         """Get knowledge graph statistics"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         entities_count = conn.execute(
             "SELECT COUNT(*) FROM entities WHERE entity_type != 'alias'"
@@ -645,8 +603,6 @@ class TemporalKnowledgeGraph:
             LIMIT 10
         """)
         top_predicates = [{"predicate": r[0], "count": r[1]} for r in cursor.fetchall()]
-
-        conn.close()
 
         return {
             "entities": entities_count,

@@ -14,7 +14,6 @@ Key Features:
 - Integration with app discovery and tool binding systems
 """
 
-import sqlite3
 import json
 import logging
 import threading
@@ -23,9 +22,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from contextlib import contextmanager
 from collections import defaultdict
 import heapq
+
+from src.utils.db_pool import get_connection, connection as db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -246,92 +246,86 @@ class KnowledgeGraph:
 
     def _init_db(self, enable_wal: bool):
         """Initialize SQLite database with optimized schema"""
-        import os
+        with db_connection(self.db_path) as conn:
+            if enable_wal:
+                conn.execute("PRAGMA journal_mode=WAL")
 
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=1000")
+            conn.execute("PRAGMA temp_store=MEMORY")
 
-        conn = sqlite3.connect(self.db_path)
+            # Nodes table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS nodes (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    package_name TEXT NOT NULL,
+                    capabilities TEXT,
+                    permissions TEXT,
+                    data_types TEXT,
+                    export_data_schemas TEXT,
+                    import_data_schemas TEXT,
+                    category TEXT,
+                    version TEXT,
+                    description TEXT,
+                    is_running INTEGER DEFAULT 0,
+                    last_used REAL,
+                    use_count INTEGER DEFAULT 0,
+                    validity_start REAL,
+                    validity_end REAL,
+                    metadata TEXT,
+                    updated_at REAL
+                )
+            """)
 
-        if enable_wal:
-            conn.execute("PRAGMA journal_mode=WAL")
+            # Relationships table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS relationships (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    relationship_type TEXT NOT NULL,
+                    weight REAL DEFAULT 1.0,
+                    frequency INTEGER DEFAULT 1,
+                    validity_start REAL,
+                    validity_end REAL,
+                    properties TEXT,
+                    created_at REAL,
+                    FOREIGN KEY (source_id) REFERENCES nodes(id),
+                    FOREIGN KEY (target_id) REFERENCES nodes(id)
+                )
+            """)
 
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA cache_size=1000")
-        conn.execute("PRAGMA temp_store=MEMORY")
-
-        # Nodes table
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS nodes (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                package_name TEXT NOT NULL,
-                capabilities TEXT,
-                permissions TEXT,
-                data_types TEXT,
-                export_data_schemas TEXT,
-                import_data_schemas TEXT,
-                category TEXT,
-                version TEXT,
-                description TEXT,
-                is_running INTEGER DEFAULT 0,
-                last_used REAL,
-                use_count INTEGER DEFAULT 0,
-                validity_start REAL,
-                validity_end REAL,
-                metadata TEXT,
-                updated_at REAL
+            # Indexes for fast queries
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rels_source ON relationships(source_id)"
             )
-        """)
-
-        # Relationships table
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS relationships (
-                id TEXT PRIMARY KEY,
-                source_id TEXT NOT NULL,
-                target_id TEXT NOT NULL,
-                relationship_type TEXT NOT NULL,
-                weight REAL DEFAULT 1.0,
-                frequency INTEGER DEFAULT 1,
-                validity_start REAL,
-                validity_end REAL,
-                properties TEXT,
-                created_at REAL,
-                FOREIGN KEY (source_id) REFERENCES nodes(id),
-                FOREIGN KEY (target_id) REFERENCES nodes(id)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rels_target ON relationships(target_id)"
             )
-        """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rels_type ON relationships(relationship_type)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nodes_category ON nodes(category)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_nodes_running ON nodes(is_running)"
+            )
 
-        # Indexes for fast queries
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_rels_source ON relationships(source_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_rels_target ON relationships(target_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_rels_type ON relationships(relationship_type)"
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_category ON nodes(category)")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_nodes_running ON nodes(is_running)"
-        )
-
-        # Fast path query views
-        conn.execute("""
-            CREATE VIEW IF NOT EXISTS capability_graph AS
-            SELECT r.source_id, r.target_id, r.relationship_type, r.weight
-            FROM relationships r
-            WHERE r.relationship_type = 'provides_capability'
-               OR r.relationship_type = 'requires_capability'
-        """)
-
-        conn.commit()
-        conn.close()
+            # Fast path query views
+            conn.execute("""
+                CREATE VIEW IF NOT EXISTS capability_graph AS
+                SELECT r.source_id, r.target_id, r.relationship_type, r.weight
+                FROM relationships r
+                WHERE r.relationship_type = 'provides_capability'
+                   OR r.relationship_type = 'requires_capability'
+            """)
 
     def _load_cache(self):
         """Load frequently accessed data into memory cache"""
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = get_connection(self.db_path)
 
             # Load nodes
             cursor = conn.execute(
@@ -373,56 +367,40 @@ class KnowledgeGraph:
             for row in cursor.fetchall():
                 self._relationship_cache[row[0]].append(row[1])
 
-            conn.close()
-
-    @contextmanager
-    def _transaction(self, conn: sqlite3.Connection):
-        """Context manager for transactions"""
-        try:
-            yield conn
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise KnowledgeGraphError(f"Transaction failed: {e}")
-
     def add_node(self, node: AppNode) -> AppNode:
         """Add or update a node in the knowledge graph"""
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            try:
-                with self._transaction(conn):
-                    now = time.time()
-                    conn.execute(
-                        """INSERT OR REPLACE INTO nodes
-                           (id, name, package_name, capabilities, permissions,
-                            data_types, export_data_schemas, import_data_schemas,
-                            category, version, description, is_running,
-                            last_used, use_count, validity_start, validity_end,
-                            metadata, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            node.id,
-                            node.name,
-                            node.package_name,
-                            json.dumps(node.capabilities),
-                            json.dumps(node.permissions),
-                            json.dumps(node.data_types),
-                            json.dumps(node.export_data_schemas),
-                            json.dumps(node.import_data_schemas),
-                            node.category,
-                            node.version,
-                            node.description,
-                            int(node.is_running),
-                            node.last_used,
-                            node.use_count,
-                            node.validity.start if node.validity else now,
-                            node.validity.end if node.validity else None,
-                            json.dumps(node.metadata),
-                            now,
-                        ),
-                    )
-            finally:
-                conn.close()
+            with db_connection(self.db_path) as conn:
+                now = time.time()
+                conn.execute(
+                    """INSERT OR REPLACE INTO nodes
+                       (id, name, package_name, capabilities, permissions,
+                        data_types, export_data_schemas, import_data_schemas,
+                        category, version, description, is_running,
+                        last_used, use_count, validity_start, validity_end,
+                        metadata, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        node.id,
+                        node.name,
+                        node.package_name,
+                        json.dumps(node.capabilities),
+                        json.dumps(node.permissions),
+                        json.dumps(node.data_types),
+                        json.dumps(node.export_data_schemas),
+                        json.dumps(node.import_data_schemas),
+                        node.category,
+                        node.version,
+                        node.description,
+                        int(node.is_running),
+                        node.last_used,
+                        node.use_count,
+                        node.validity.start if node.validity else now,
+                        node.validity.end if node.validity else None,
+                        json.dumps(node.metadata),
+                        now,
+                    ),
+                )
 
             # Update cache
             self._node_cache[node.id] = node
@@ -449,31 +427,27 @@ class KnowledgeGraph:
     def add_relationship(self, edge: RelationshipEdge) -> RelationshipEdge:
         """Add or update a relationship in the knowledge graph"""
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            try:
-                with self._transaction(conn):
-                    now = time.time()
-                    conn.execute(
-                        """INSERT OR REPLACE INTO relationships
-                           (id, source_id, target_id, relationship_type,
-                            weight, frequency, validity_start, validity_end,
-                            properties, created_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            edge.id,
-                            edge.source_id,
-                            edge.target_id,
-                            edge.relationship_type.value,
-                            edge.weight,
-                            edge.frequency,
-                            edge.validity.start if edge.validity else now,
-                            edge.validity.end if edge.validity else None,
-                            json.dumps(edge.properties),
-                            now,
-                        ),
-                    )
-            finally:
-                conn.close()
+            with db_connection(self.db_path) as conn:
+                now = time.time()
+                conn.execute(
+                    """INSERT OR REPLACE INTO relationships
+                       (id, source_id, target_id, relationship_type,
+                        weight, frequency, validity_start, validity_end,
+                        properties, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        edge.id,
+                        edge.source_id,
+                        edge.target_id,
+                        edge.relationship_type.value,
+                        edge.weight,
+                        edge.frequency,
+                        edge.validity.start if edge.validity else now,
+                        edge.validity.end if edge.validity else None,
+                        json.dumps(edge.properties),
+                        now,
+                    ),
+                )
 
             # Update cache
             self._relationship_cache[edge.source_id].append(edge.target_id)
@@ -488,7 +462,7 @@ class KnowledgeGraph:
     ) -> List[RelationshipEdge]:
         """Get relationships for a node (uses fast path query)"""
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = get_connection(self.db_path)
             now = time.time()
 
             if direction == "outgoing":
@@ -526,7 +500,6 @@ class KnowledgeGraph:
                 )
                 results.append(edge)
 
-            conn.close()
             return results
 
     def query_by_capability(
@@ -648,7 +621,7 @@ class KnowledgeGraph:
     def get_stats(self) -> Dict[str, Any]:
         """Get knowledge graph statistics"""
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = get_connection(self.db_path)
 
             nodes_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
             active_nodes = conn.execute(
@@ -665,8 +638,6 @@ class KnowledgeGraph:
                 caps = json.loads(row[0]) if row[0] else []
                 for cap in caps:
                     capability_counts[cap] += 1
-
-            conn.close()
 
             return {
                 "total_nodes": nodes_count,

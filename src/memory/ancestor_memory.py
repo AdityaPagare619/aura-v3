@@ -3,7 +3,6 @@ Ancestor Memory - Long-term Storage
 Lazy loading, encryption, archival, pruning
 """
 
-import sqlite3
 import json
 import uuid
 import time
@@ -14,6 +13,8 @@ import base64
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+from src.utils.db_pool import get_connection, connection as db_connection
 
 
 def _generate_encryption_key() -> str:
@@ -65,42 +66,36 @@ class AncestorMemory:
 
     def _init_db(self):
         """Initialize database"""
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        with db_connection(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS archived_memories (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    summary TEXT,
+                    importance REAL DEFAULT 0.5,
+                    memory_type TEXT DEFAULT 'general',
+                    tags TEXT,
+                    created_at REAL,
+                    archived_at REAL,
+                    last_accessed REAL,
+                    access_count INTEGER DEFAULT 0,
+                    compression_ratio REAL DEFAULT 1.0,
+                    encrypted INTEGER DEFAULT 0,
+                    content_hash TEXT
+                )
+            """)
 
-        conn = sqlite3.connect(self.db_path)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_archived_importance ON archived_memories(importance DESC)
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS archived_memories (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                summary TEXT,
-                importance REAL DEFAULT 0.5,
-                memory_type TEXT DEFAULT 'general',
-                tags TEXT,
-                created_at REAL,
-                archived_at REAL,
-                last_accessed REAL,
-                access_count INTEGER DEFAULT 0,
-                compression_ratio REAL DEFAULT 1.0,
-                encrypted INTEGER DEFAULT 0,
-                content_hash TEXT
-            )
-        """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_archived_type ON archived_memories(memory_type)
+            """)
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_archived_importance ON archived_memories(importance DESC)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_archived_type ON archived_memories(memory_type)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_archived_archived_at ON archived_memories(archived_at DESC)
-        """)
-
-        conn.commit()
-        conn.close()
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_archived_archived_at ON archived_memories(archived_at DESC)
+            """)
 
     def archive(
         self,
@@ -140,34 +135,30 @@ class AncestorMemory:
 
     def _store_memory(self, memory: ArchivedMemory, content_hash: str):
         """Store archived memory"""
-        conn = sqlite3.connect(self.db_path)
-
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO archived_memories
-            (id, content, summary, importance, memory_type, tags, created_at, archived_at, 
-             last_accessed, access_count, compression_ratio, encrypted, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                memory.id,
-                memory.content,
-                memory.summary,
-                memory.importance,
-                memory.memory_type,
-                json.dumps(memory.tags),
-                memory.created_at,
-                memory.archived_at,
-                memory.last_accessed,
-                memory.access_count,
-                memory.compression_ratio,
-                1 if memory.encrypted else 0,
-                content_hash,
-            ),
-        )
-
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO archived_memories
+                (id, content, summary, importance, memory_type, tags, created_at, archived_at, 
+                 last_accessed, access_count, compression_ratio, encrypted, content_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    memory.id,
+                    memory.content,
+                    memory.summary,
+                    memory.importance,
+                    memory.memory_type,
+                    json.dumps(memory.tags),
+                    memory.created_at,
+                    memory.archived_at,
+                    memory.last_accessed,
+                    memory.access_count,
+                    memory.compression_ratio,
+                    1 if memory.encrypted else 0,
+                    content_hash,
+                ),
+            )
 
     def retrieve(
         self, memory_id: str, decompress: bool = True
@@ -183,7 +174,7 @@ class AncestorMemory:
             return memory
 
         # Load from database
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             """
             SELECT id, content, summary, importance, memory_type, tags, created_at, 
@@ -194,7 +185,6 @@ class AncestorMemory:
         )
 
         row = cursor.fetchone()
-        conn.close()
 
         if not row:
             return None
@@ -235,7 +225,7 @@ class AncestorMemory:
     ) -> List[ArchivedMemory]:
         """Search archived memories"""
 
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         query_lower = query.lower()
         query_words = query_lower.split()
@@ -280,8 +270,6 @@ class AncestorMemory:
                 memory._relevance = relevance
                 results.append(memory)
 
-        conn.close()
-
         # Sort by combined score
         results.sort(
             key=lambda x: x.importance * 0.5 + getattr(x, "_relevance", 0), reverse=True
@@ -291,17 +279,15 @@ class AncestorMemory:
 
     def _update_access(self, memory_id: str):
         """Update access statistics"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            UPDATE archived_memories
-            SET last_accessed = ?, access_count = access_count + 1
-            WHERE id = ?
-        """,
-            (time.time(), memory_id),
-        )
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE archived_memories
+                SET last_accessed = ?, access_count = access_count + 1
+                WHERE id = ?
+            """,
+                (time.time(), memory_id),
+            )
 
     def _cache_memory(self, memory: ArchivedMemory):
         """Cache memory, evicting oldest if needed"""
@@ -323,34 +309,29 @@ class AncestorMemory:
         """Prune old, low-importance memories"""
         cutoff_time = time.time() - (max_age_days * 86400)
 
-        conn = sqlite3.connect(self.db_path)
+        with db_connection(self.db_path) as conn:
+            # Delete old, low-importance memories
+            cursor = conn.execute(
+                """
+                DELETE FROM archived_memories
+                WHERE archived_at < ? AND importance < ?
+            """,
+                (cutoff_time, min_importance),
+            )
 
-        # Delete old, low-importance memories
-        cursor = conn.execute(
-            """
-            DELETE FROM archived_memories
-            WHERE archived_at < ? AND importance < ?
-        """,
-            (cutoff_time, min_importance),
-        )
-
-        deleted = cursor.rowcount
-        conn.commit()
-        conn.close()
+            deleted = cursor.rowcount
 
         return deleted
 
     def get_stats(self) -> Dict:
         """Get memory statistics"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         cursor = conn.execute("""
             SELECT COUNT(*), AVG(importance), SUM(access_count), AVG(compression_ratio)
             FROM archived_memories
         """)
         row = cursor.fetchone()
-
-        conn.close()
 
         return {
             "total_archived": row[0] or 0,

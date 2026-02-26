@@ -3,7 +3,6 @@ Episodic Memory - Hippocampus CA3 Analogue
 Fast encoding, pattern separation/completion, emotional tagging
 """
 
-import sqlite3
 import json
 import uuid
 import time
@@ -12,6 +11,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
+from src.utils.db_pool import get_connection, connection as db_connection
 
 
 @dataclass
@@ -123,39 +123,36 @@ class EpisodicMemory:
         self.pattern_completer = PatternCompleter()
         self._embedding_cache: Dict[str, List[float]] = {}
         self._max_memory_embeddings = 1000
+        self._recent_embeddings_cache: Optional[List[List[float]]] = None
+        self._cache_timestamp: float = 0
+        self._cache_ttl: float = 300  # 5 minutes
         self._init_db()
 
     def _init_db(self):
         """Initialize SQLite database"""
-        import os
-
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS episodic_traces (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                sensory BLOB,
-                spatial BLOB,
-                temporal BLOB,
-                emotional REAL DEFAULT 0.0,
-                outcome TEXT,
-                context TEXT,
-                importance REAL DEFAULT 0.5,
-                created_at REAL,
-                access_count INTEGER DEFAULT 0,
-                consolidated INTEGER DEFAULT 0
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_episodic_created ON episodic_traces(created_at DESC)
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_episodic_importance ON episodic_traces(importance DESC)
-        """)
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS episodic_traces (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    sensory BLOB,
+                    spatial BLOB,
+                    temporal BLOB,
+                    emotional REAL DEFAULT 0.0,
+                    outcome TEXT,
+                    context TEXT,
+                    importance REAL DEFAULT 0.5,
+                    created_at REAL,
+                    access_count INTEGER DEFAULT 0,
+                    consolidated INTEGER DEFAULT 0
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_episodic_created ON episodic_traces(created_at DESC)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_episodic_importance ON episodic_traces(importance DESC)
+            """)
 
     def encode(self, experience: Experience) -> EpisodicTrace:
         """Pattern-separate before storing"""
@@ -197,43 +194,34 @@ class EpisodicMemory:
 
     def _store_trace(self, trace: EpisodicTrace):
         """Store trace in database with transaction"""
-        import os
-
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-
-        conn = sqlite3.connect(self.db_path)
+        # Invalidate embeddings cache when new trace is stored
+        self._recent_embeddings_cache = None
 
         def to_blob(arr):
             return json.dumps(arr) if arr else None
 
-        try:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO episodic_traces
-                    (id, content, sensory, spatial, temporal, emotional, outcome, context, importance, created_at, access_count, consolidated)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        trace.id,
-                        trace.content,
-                        to_blob(trace.sensory),
-                        to_blob(trace.spatial),
-                        to_blob(trace.temporal),
-                        trace.emotional,
-                        trace.outcome,
-                        json.dumps(trace.context),
-                        trace.importance,
-                        trace.created_at,
-                        trace.access_count,
-                        1 if trace.consolidated else 0,
-                    ),
-                )
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO episodic_traces
+                (id, content, sensory, spatial, temporal, emotional, outcome, context, importance, created_at, access_count, consolidated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    trace.id,
+                    trace.content,
+                    to_blob(trace.sensory),
+                    to_blob(trace.spatial),
+                    to_blob(trace.temporal),
+                    trace.emotional,
+                    trace.outcome,
+                    json.dumps(trace.context),
+                    trace.importance,
+                    trace.created_at,
+                    trace.access_count,
+                    1 if trace.consolidated else 0,
+                ),
+            )
 
     def retrieve(
         self, query_embedding: List[float], top_k: int = 10
@@ -258,7 +246,7 @@ class EpisodicMemory:
         self, query_embedding: List[float], limit: int
     ) -> List[EpisodicTrace]:
         """Search for similar traces using simple cosine similarity"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             """
             SELECT id, content, sensory, spatial, temporal, emotional, outcome, context, importance, created_at, access_count, consolidated
@@ -307,12 +295,11 @@ class EpisodicMemory:
                 )
             )
 
-        conn.close()
         return sorted(results, key=lambda x: x.importance, reverse=True)[:limit]
 
     def _get_recent(self, limit: int) -> List[EpisodicTrace]:
         """Get recent traces"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             """
             SELECT id, content, sensory, spatial, temporal, emotional, outcome, context, importance, created_at, access_count, consolidated
@@ -342,19 +329,15 @@ class EpisodicMemory:
                 )
             )
 
-        conn.close()
         return results
 
     def _get_all_embeddings(self, max_sample: int = None) -> List[List[float]]:
         """Get embeddings for pattern separation (lazy with memory check)"""
-        import sys
-
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         # Count total first
         count_cursor = conn.execute("SELECT COUNT(*) FROM episodic_traces")
         total_count = count_cursor.fetchone()[0]
-        conn.close()
 
         # Return empty if too many embeddings (memory protection)
         if total_count > self._max_memory_embeddings:
@@ -363,7 +346,6 @@ class EpisodicMemory:
         # Limit sample size if specified
         limit = max_sample if max_sample else min(total_count, 500)
 
-        conn = sqlite3.connect(self.db_path)
         cursor = conn.execute(
             "SELECT sensory, spatial, temporal FROM episodic_traces LIMIT ?", (limit,)
         )
@@ -380,37 +362,41 @@ class EpisodicMemory:
             if emb:
                 embeddings.append(emb)
 
-        conn.close()
         return embeddings
 
     def get_all_embeddings(self, max_sample: int = None) -> List[List[float]]:
-        """Public wrapper with lazy loading and memory protection"""
-        return self._get_all_embeddings(max_sample)
+        """Public wrapper with lazy loading, caching, and memory protection"""
+        now = time.time()
+        if (
+            self._recent_embeddings_cache is not None
+            and (now - self._cache_timestamp) < self._cache_ttl
+        ):
+            return self._recent_embeddings_cache
+
+        # Limit to 100 for pattern separation (more than enough)
+        effective_max = min(max_sample, 100) if max_sample else 100
+        result = self._get_all_embeddings(effective_max)
+        self._recent_embeddings_cache = result
+        self._cache_timestamp = now
+        return result
 
     def _update_access(self, trace_id: str):
         """Update access count with transaction"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    """
-                    UPDATE episodic_traces 
-                    SET access_count = access_count + 1 
-                    WHERE id = ?
-                """,
-                    (trace_id,),
-                )
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE episodic_traces 
+                SET access_count = access_count + 1 
+                WHERE id = ?
+            """,
+                (trace_id,),
+            )
 
     def get_unconsolidated(
         self, min_importance: float = 0.7, limit: int = 10
     ) -> List[EpisodicTrace]:
         """Get unconsolidated traces ready for consolidation"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             """
             SELECT id, content, sensory, spatial, temporal, emotional, outcome, context, importance, created_at, access_count, consolidated
@@ -441,33 +427,24 @@ class EpisodicMemory:
                 )
             )
 
-        conn.close()
         return results
 
     def mark_consolidated(self, trace_id: str):
         """Mark trace as consolidated with transaction"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    "UPDATE episodic_traces SET consolidated = 1 WHERE id = ?",
-                    (trace_id,),
-                )
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                "UPDATE episodic_traces SET consolidated = 1 WHERE id = ?",
+                (trace_id,),
+            )
 
     def get_stats(self) -> Dict:
         """Get memory statistics"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute("""
             SELECT COUNT(*), SUM(consolidated), AVG(importance), MAX(created_at)
             FROM episodic_traces
         """)
         row = cursor.fetchone()
-        conn.close()
 
         return {
             "total_traces": row[0] or 0,

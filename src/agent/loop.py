@@ -87,6 +87,7 @@ class ReActAgent:
         learning_engine: LearningEngine,
         security_layer: SecurityLayer,
         max_iterations: int = 10,
+        max_history_messages: int = 20,
         approval_callback: Optional[Callable] = None,
     ):
         self.llm = llm
@@ -96,6 +97,7 @@ class ReActAgent:
         self.learning = learning_engine
         self.security = security_layer
         self.max_iterations = max_iterations
+        self.max_history_messages = max_history_messages
         self.approval_callback = approval_callback
 
         self.state = AgentState.IDLE
@@ -161,6 +163,17 @@ class ReActAgent:
         self._neural_router = router
         logger.info("Neural systems connected to agent loop")
 
+    def _trim_messages(self, messages: List[Dict]) -> List[Dict]:
+        """Trim message history to prevent unbounded memory growth.
+
+        Preserves messages[0] (system prompt) and keeps the most recent
+        messages up to self.max_history_messages total.
+        """
+        if len(messages) <= self.max_history_messages:
+            return messages
+        # Keep system prompt (messages[0]) + last (max - 1) messages
+        return [messages[0]] + messages[-(self.max_history_messages - 1) :]
+
     def set_tool_orchestrator(self, orchestrator):
         """Set the tool orchestrator for multi-step tool execution"""
         self._tool_orchestrator = orchestrator
@@ -221,6 +234,9 @@ class ReActAgent:
             logger.info(
                 f"[{self.session_id}] ReAct iteration {iteration}/{self.max_iterations}"
             )
+
+            # Trim message history to bound context window
+            messages = self._trim_messages(messages)
 
             # Get LLM response with tool schemas
             llm_response = await self.llm.generate_with_tools(messages)
@@ -894,6 +910,7 @@ def get_agent(**kwargs) -> ReActAgent:
         learning_engine=learning_engine,
         security_layer=security_layer,
         max_iterations=kwargs.get("max_iterations", 10),
+        max_history_messages=kwargs.get("max_history_messages", 20),
     )
 
     return _agent_instance

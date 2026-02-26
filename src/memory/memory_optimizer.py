@@ -3,7 +3,6 @@ Memory Optimizer - Memory Management and Optimization
 Compresses old memories, archives unused data, balances storage vs recall
 """
 
-import sqlite3
 import json
 import logging
 import time
@@ -14,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import defaultdict
 import os
+
+from src.utils.db_pool import get_connection, connection as db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -62,31 +63,25 @@ class MemoryArchiver:
 
     def _init_archive_db(self):
         """Initialize archive database"""
-        os.makedirs(os.path.dirname(self.archive_db), exist_ok=True)
+        with db_connection(self.archive_db) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS archived_memories (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    compressed_content BLOB,
+                    metadata TEXT,
+                    archived_at REAL,
+                    original_size INTEGER,
+                    compressed_size INTEGER,
+                    access_count INTEGER DEFAULT 0,
+                    importance REAL DEFAULT 0.5
+                )
+            """)
 
-        conn = sqlite3.connect(self.archive_db)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS archived_memories (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                compressed_content BLOB,
-                metadata TEXT,
-                archived_at REAL,
-                original_size INTEGER,
-                compressed_size INTEGER,
-                access_count INTEGER DEFAULT 0,
-                importance REAL DEFAULT 0.5
-            )
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_archived_archived_at 
-            ON archived_memories(archived_at DESC)
-        """)
-
-        conn.commit()
-        conn.close()
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_archived_archived_at 
+                ON archived_memories(archived_at DESC)
+            """)
 
     def archive(
         self,
@@ -98,10 +93,7 @@ class MemoryArchiver:
 
         archived_count = 0
 
-        conn_active = sqlite3.connect(self.active_db)
-        conn_archive = sqlite3.connect(self.archive_db)
-
-        try:
+        with db_connection(self.archive_db) as conn_archive:
             for memory in memories:
                 memory_id = memory.get("id")
                 content = memory.get("content", "")
@@ -115,34 +107,33 @@ class MemoryArchiver:
                 compressed = self._compress_content(content)
                 compressed_size = len(compressed)
 
-                with conn_archive:
-                    conn_archive.execute(
-                        """INSERT OR REPLACE INTO archived_memories
-                           (id, content, compressed_content, metadata, archived_at, 
-                            original_size, compressed_size, access_count, importance)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            memory_id,
-                            content,
-                            compressed,
-                            json.dumps(metadata),
-                            time.time(),
-                            original_size,
-                            compressed_size,
-                            memory.get("access_count", 0),
-                            importance,
-                        ),
-                    )
+                conn_archive.execute(
+                    """INSERT OR REPLACE INTO archived_memories
+                       (id, content, compressed_content, metadata, archived_at, 
+                        original_size, compressed_size, access_count, importance)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        memory_id,
+                        content,
+                        compressed,
+                        json.dumps(metadata),
+                        time.time(),
+                        original_size,
+                        compressed_size,
+                        memory.get("access_count", 0),
+                        importance,
+                    ),
+                )
 
-                conn_active.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
                 archived_count += 1
 
-            conn_active.commit()
-            conn_archive.commit()
-
-        finally:
-            conn_active.close()
-            conn_archive.close()
+        with db_connection(self.active_db) as conn_active:
+            for memory in memories:
+                memory_id = memory.get("id")
+                if memory_id:
+                    conn_active.execute(
+                        "DELETE FROM memories WHERE id = ?", (memory_id,)
+                    )
 
         logger.info(f"Archived {archived_count} memories")
         return archived_count
@@ -163,7 +154,7 @@ class MemoryArchiver:
         """Restore archived memory"""
         target_db = target_db or self.active_db
 
-        conn_archive = sqlite3.connect(self.archive_db)
+        conn_archive = get_connection(self.archive_db)
         cursor = conn_archive.execute(
             """SELECT id, content, compressed_content, metadata, archived_at, 
                       original_size, compressed_size, access_count, importance
@@ -174,7 +165,6 @@ class MemoryArchiver:
         row = cursor.fetchone()
 
         if not row:
-            conn_archive.close()
             return None
 
         memory = {
@@ -188,36 +178,31 @@ class MemoryArchiver:
             "importance": row[8],
         }
 
-        conn_archive.close()
+        with db_connection(target_db) as conn_target:
+            conn_target.execute(
+                """INSERT OR REPLACE INTO memories 
+                   (id, content, metadata, importance, access_count)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    memory["id"],
+                    memory["content"],
+                    json.dumps(memory["metadata"]),
+                    memory["importance"],
+                    memory["access_count"],
+                ),
+            )
 
-        conn_target = sqlite3.connect(target_db)
-        conn_target.execute(
-            """INSERT OR REPLACE INTO memories 
-               (id, content, metadata, importance, access_count)
-               VALUES (?, ?, ?, ?, ?)""",
-            (
-                memory["id"],
-                memory["content"],
-                json.dumps(memory["metadata"]),
-                memory["importance"],
-                memory["access_count"],
-            ),
-        )
-        conn_target.commit()
-        conn_target.close()
-
-        conn_archive = sqlite3.connect(self.archive_db)
-        conn_archive.execute("DELETE FROM archived_memories WHERE id = ?", (memory_id,))
-        conn_archive.commit()
-        conn_archive.close()
+        with db_connection(self.archive_db) as conn_archive:
+            conn_archive.execute(
+                "DELETE FROM archived_memories WHERE id = ?", (memory_id,)
+            )
 
         return memory
 
     def get_archived_count(self) -> int:
         """Get count of archived memories"""
-        conn = sqlite3.connect(self.archive_db)
+        conn = get_connection(self.archive_db)
         count = conn.execute("SELECT COUNT(*) FROM archived_memories").fetchone()[0]
-        conn.close()
         return count
 
 
@@ -300,7 +285,7 @@ class MemoryCleanup:
         limit: int = 100,
     ) -> List[Dict]:
         """Get memories eligible for cleanup"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         cutoff_time = time.time() - (self.inactivity_days * 86400)
 
@@ -326,7 +311,6 @@ class MemoryCleanup:
                 }
             )
 
-        conn.close()
         return results
 
     def cleanup(
@@ -334,29 +318,25 @@ class MemoryCleanup:
         candidate_ids: List[str] = None,
     ) -> int:
         """Delete memories"""
-        conn = sqlite3.connect(self.db_path)
+        with db_connection(self.db_path) as conn:
+            if candidate_ids:
+                placeholders = ",".join("?" * len(candidate_ids))
+                cursor = conn.execute(
+                    f"DELETE FROM memories WHERE id IN ({placeholders})", candidate_ids
+                )
+            else:
+                candidates = self.get_cleanup_candidates(100)
+                candidate_ids = [c["id"] for c in candidates]
 
-        if candidate_ids:
-            placeholders = ",".join("?" * len(candidate_ids))
-            cursor = conn.execute(
-                f"DELETE FROM memories WHERE id IN ({placeholders})", candidate_ids
-            )
-        else:
-            candidates = self.get_cleanup_candidates(100)
-            candidate_ids = [c["id"] for c in candidates]
+                if not candidate_ids:
+                    return 0
 
-            if not candidate_ids:
-                conn.close()
-                return 0
+                placeholders = ",".join("?" * len(candidate_ids))
+                cursor = conn.execute(
+                    f"DELETE FROM memories WHERE id IN ({placeholders})", candidate_ids
+                )
 
-            placeholders = ",".join("?" * len(candidate_ids))
-            cursor = conn.execute(
-                f"DELETE FROM memories WHERE id IN ({placeholders})", candidate_ids
-            )
-
-        deleted = cursor.rowcount
-        conn.commit()
-        conn.close()
+            deleted = cursor.rowcount
 
         logger.info(f"Cleaned up {deleted} memories")
         return deleted
@@ -433,126 +413,121 @@ class MemoryOptimizer:
         force: bool,
     ) -> Dict:
         """Optimize a single database"""
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
 
         cursor = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
         if cursor.fetchone()[0] == 0:
-            conn.close()
             return {}
 
         if "episodic" in db_path:
-            return self._optimize_episodic(conn, force)
+            return self._optimize_episodic(db_path, force)
         elif "semantic" in db_path:
-            return self._optimize_semantic(conn, force)
+            return self._optimize_semantic(db_path, force)
         elif "vectors" in db_path:
-            return self._optimize_vectors(conn, force)
+            return self._optimize_vectors(db_path, force)
 
-        conn.close()
         return {}
 
     def _optimize_episodic(
         self,
-        conn: sqlite3.Connection,
+        db_path: str,
         force: bool,
     ) -> Dict:
         """Optimize episodic memory"""
         result = {"items_compressed": 0, "items_archived": 0, "items_deleted": 0}
 
-        cutoff = time.time() - (self.inactivity_days * 86400)
+        with db_connection(db_path) as conn:
+            cutoff = time.time() - (self.inactivity_days * 86400)
 
-        cursor = conn.execute(
-            """SELECT id, content, importance, consolidated 
-               FROM episodic_traces 
-               WHERE importance < ? AND consolidated = 0""",
-            (self.min_importance,),
-        )
-
-        to_archive = []
-        for row in cursor.fetchall():
-            to_archive.append(
-                {
-                    "id": row[0],
-                    "content": row[1],
-                    "importance": row[2],
-                }
+            cursor = conn.execute(
+                """SELECT id, content, importance, consolidated 
+                   FROM episodic_traces 
+                   WHERE importance < ? AND consolidated = 0""",
+                (self.min_importance,),
             )
 
-        if to_archive:
-            conn.execute(
-                """DELETE FROM episodic_traces 
-                   WHERE id IN ({})""".format(",".join("?" * len(to_archive))),
-                [m["id"] for m in to_archive],
-            )
-            result["items_archived"] = len(to_archive)
+            to_archive = []
+            for row in cursor.fetchall():
+                to_archive.append(
+                    {
+                        "id": row[0],
+                        "content": row[1],
+                        "importance": row[2],
+                    }
+                )
 
-        conn.commit()
-        conn.close()
+            if to_archive:
+                conn.execute(
+                    """DELETE FROM episodic_traces 
+                       WHERE id IN ({})""".format(",".join("?" * len(to_archive))),
+                    [m["id"] for m in to_archive],
+                )
+                result["items_archived"] = len(to_archive)
 
         return result
 
     def _optimize_semantic(
         self,
-        conn: sqlite3.Connection,
+        db_path: str,
         force: bool,
     ) -> Dict:
         """Optimize semantic memory"""
         result = {"items_compressed": 0, "items_deleted": 0}
 
-        cursor = conn.execute(
-            """SELECT id, fact, confidence 
-               FROM facts 
-               WHERE confidence < ? AND evidence_count = 1""",
-            (self.min_importance,),
-        )
-
-        to_delete = [
-            row[0] for row in cursor.fetchall() if row[2] < self.min_importance * 0.5
-        ]
-
-        if to_delete:
-            conn.execute(
-                "DELETE FROM facts WHERE id IN ({})".format(
-                    ",".join("?" * len(to_delete))
-                ),
-                to_delete,
+        with db_connection(db_path) as conn:
+            cursor = conn.execute(
+                """SELECT id, fact, confidence 
+                   FROM facts 
+                   WHERE confidence < ? AND evidence_count = 1""",
+                (self.min_importance,),
             )
-            result["items_deleted"] = len(to_delete)
 
-        conn.commit()
-        conn.close()
+            to_delete = [
+                row[0]
+                for row in cursor.fetchall()
+                if row[2] < self.min_importance * 0.5
+            ]
+
+            if to_delete:
+                conn.execute(
+                    "DELETE FROM facts WHERE id IN ({})".format(
+                        ",".join("?" * len(to_delete))
+                    ),
+                    to_delete,
+                )
+                result["items_deleted"] = len(to_delete)
 
         return result
 
     def _optimize_vectors(
         self,
-        conn: sqlite3.Connection,
+        db_path: str,
         force: bool,
     ) -> Dict:
         """Optimize vector store"""
         result = {"items_compressed": 0, "items_deleted": 0}
 
-        cursor = conn.execute(
-            """SELECT id, importance, access_count 
-               FROM vectors 
-               WHERE importance < ? AND access_count < 2""",
-            (self.min_importance,),
-        )
-
-        to_delete = [row[0] for row in cursor.fetchall()]
-
-        if to_delete:
-            conn.execute(
-                "DELETE FROM vectors WHERE id IN ({})".format(
-                    ",".join("?" * len(to_delete))
-                ),
-                to_delete,
+        with db_connection(db_path) as conn:
+            cursor = conn.execute(
+                """SELECT id, importance, access_count 
+                   FROM vectors 
+                   WHERE importance < ? AND access_count < 2""",
+                (self.min_importance,),
             )
-            result["items_deleted"] = len(to_delete)
 
-        conn.commit()
+            to_delete = [row[0] for row in cursor.fetchall()]
 
-        conn.execute("VACUUM")
-        conn.close()
+            if to_delete:
+                conn.execute(
+                    "DELETE FROM vectors WHERE id IN ({})".format(
+                        ",".join("?" * len(to_delete))
+                    ),
+                    to_delete,
+                )
+                result["items_deleted"] = len(to_delete)
+
+        # VACUUM must run outside a transaction
+        get_connection(db_path).execute("VACUUM")
 
         return result
 
@@ -598,7 +573,7 @@ class MemoryOptimizer:
 
     def _get_db_metrics(self, db_path: str) -> MemoryMetrics:
         """Get metrics for a database"""
-        conn = sqlite3.connect(db_path)
+        conn = get_connection(db_path)
 
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -621,8 +596,6 @@ class MemoryOptimizer:
                 total_size += size
             except:
                 pass
-
-        conn.close()
 
         return MemoryMetrics(
             total_items=total_items,

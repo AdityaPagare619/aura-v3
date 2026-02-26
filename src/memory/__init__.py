@@ -13,12 +13,13 @@ Memory Hierarchy:
 import asyncio
 import json
 import logging
-import sqlite3
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import deque
 import hashlib
+
+from src.utils.db_pool import get_connection, connection as db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -182,31 +183,25 @@ class LongTermMemory:
 
     def _init_db(self):
         """Initialize database"""
-        import os
-
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS memories (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                importance REAL DEFAULT 0.5,
-                memory_type TEXT DEFAULT 'fact',
-                metadata TEXT,
-                created_at TEXT,
-                accessed_at TEXT,
-                access_count INTEGER DEFAULT 0
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance DESC)
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_type ON memories(memory_type)
-        """)
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    importance REAL DEFAULT 0.5,
+                    memory_type TEXT DEFAULT 'fact',
+                    metadata TEXT,
+                    created_at TEXT,
+                    accessed_at TEXT,
+                    access_count INTEGER DEFAULT 0
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance DESC)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_type ON memories(memory_type)
+            """)
 
     def store(
         self,
@@ -216,38 +211,29 @@ class LongTermMemory:
         metadata: Dict = None,
     ) -> str:
         """Store a memory"""
-        import os
-
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-
-        conn = sqlite3.connect(self.db_path)
-
         # Generate ID from content hash
         mem_id = hashlib.md5(content.encode()).hexdigest()[:16]
         now = datetime.now().isoformat()
 
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO memories 
-            (id, content, importance, memory_type, metadata, created_at, accessed_at, access_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 
-                COALESCE((SELECT access_count FROM memories WHERE id = ?), 0) + 1)
-        """,
-            (
-                mem_id,
-                content,
-                importance,
-                memory_type,
-                json.dumps(metadata or {}),
-                now,
-                now,
-                mem_id,
-            ),
-        )
-
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO memories 
+                (id, content, importance, memory_type, metadata, created_at, accessed_at, access_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 
+                    COALESCE((SELECT access_count FROM memories WHERE id = ?), 0) + 1)
+            """,
+                (
+                    mem_id,
+                    content,
+                    importance,
+                    memory_type,
+                    json.dumps(metadata or {}),
+                    now,
+                    now,
+                    mem_id,
+                ),
+            )
 
         return mem_id
 
@@ -259,7 +245,7 @@ class LongTermMemory:
         min_importance: float = 0.0,
     ) -> List[Dict]:
         """Retrieve relevant memories"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         # Simple keyword-based retrieval (can be upgraded to embeddings)
         query_words = query.lower().split()
@@ -300,8 +286,6 @@ class LongTermMemory:
                 }
             )
 
-        conn.close()
-
         # Sort by combined score
         results.sort(key=lambda x: x["importance"] * 0.5 + x["relevance"], reverse=True)
 
@@ -309,24 +293,20 @@ class LongTermMemory:
 
     def update_access(self, mem_id: str):
         """Update access timestamp and count"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            UPDATE memories 
-            SET accessed_at = ?, access_count = access_count + 1
-            WHERE id = ?
-        """,
-            (datetime.now().isoformat(), mem_id),
-        )
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE memories 
+                SET accessed_at = ?, access_count = access_count + 1
+                WHERE id = ?
+            """,
+                (datetime.now().isoformat(), mem_id),
+            )
 
     def delete(self, mem_id: str):
         """Delete a memory"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("DELETE FROM memories WHERE id = ?", (mem_id,))
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute("DELETE FROM memories WHERE id = ?", (mem_id,))
 
 
 class SelfModel:
@@ -344,22 +324,16 @@ class SelfModel:
 
     def _init_db(self):
         """Initialize self-model database"""
-        import os
-
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS self_model (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                category TEXT,
-                confidence REAL DEFAULT 0.5,
-                updated_at TEXT
-            )
-        """)
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS self_model (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    category TEXT,
+                    confidence REAL DEFAULT 0.5,
+                    updated_at TEXT
+                )
+            """)
 
     def set(
         self,
@@ -369,23 +343,26 @@ class SelfModel:
         confidence: float = 0.5,
     ):
         """Set a self-model attribute"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO self_model (key, value, category, confidence, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-        """,
-            (key, json.dumps(value), category, confidence, datetime.now().isoformat()),
-        )
-        conn.commit()
-        conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO self_model (key, value, category, confidence, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            """,
+                (
+                    key,
+                    json.dumps(value),
+                    category,
+                    confidence,
+                    datetime.now().isoformat(),
+                ),
+            )
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a self-model attribute"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute("SELECT value FROM self_model WHERE key = ?", (key,))
         row = cursor.fetchone()
-        conn.close()
 
         if row:
             try:
@@ -396,7 +373,7 @@ class SelfModel:
 
     def get_category(self, category: str) -> Dict[str, Any]:
         """Get all attributes in a category"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             "SELECT key, value, confidence FROM self_model WHERE category = ?",
             (category,),
@@ -409,7 +386,6 @@ class SelfModel:
             except:
                 results[row[0]] = {"value": row[1], "confidence": row[2]}
 
-        conn.close()
         return results
 
     def learn(self, key: str, value: Any, category: str = "preference"):
@@ -419,14 +395,13 @@ class SelfModel:
         if existing is not None:
             # Increase confidence on repeated observation
             current_confidence = 0.5  # Default
-            conn = sqlite3.connect(self.db_path)
+            conn = get_connection(self.db_path)
             cursor = conn.execute(
                 "SELECT confidence FROM self_model WHERE key = ?", (key,)
             )
             row = cursor.fetchone()
             if row:
                 current_confidence = min(1.0, row[0] + 0.1)  # Increase by 0.1
-            conn.close()
 
             self.set(key, value, category, current_confidence)
         else:
@@ -542,11 +517,7 @@ class HierarchicalMemory:
         logger.info("Initializing Hierarchical Memory...")
         # Long-term memory initializes its DB in __init__
         # Self-model initializes in __init__
-        # Just verify DB paths exist
-        import os
-
-        os.makedirs(os.path.dirname(self.long_term.db_path), exist_ok=True)
-        os.makedirs(os.path.dirname(self.self_model.db_path), exist_ok=True)
+        # Pool handles directory creation
         logger.info("Hierarchical Memory initialized")
 
     async def persist(self):

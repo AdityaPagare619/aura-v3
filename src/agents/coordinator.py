@@ -51,6 +51,7 @@ class AgentTask:
     completed_at: Optional[datetime] = None
     result: Any = None
     error: Optional[str] = None
+    _done_event: Optional[asyncio.Event] = field(default=None, repr=False)
 
 
 @dataclass
@@ -95,6 +96,7 @@ class Agent:
         self._current_task: Optional[AgentTask] = None
         self._task_queue: asyncio.Queue = asyncio.Queue()
         self._running = False
+        self._stop_event: asyncio.Event = asyncio.Event()
         self._worker_task: Optional[asyncio.Task] = None
 
     @property
@@ -107,12 +109,14 @@ class Agent:
             return
 
         self._running = True
+        self._stop_event.clear()
         self._worker_task = asyncio.create_task(self._worker_loop())
         logger.info(f"Agent {self.name} started")
 
     async def stop(self):
         """Stop the agent"""
         self._running = False
+        self._stop_event.set()
 
         if self._worker_task:
             self._worker_task.cancel()
@@ -128,10 +132,33 @@ class Agent:
         await self._task_queue.put(task)
 
     async def _worker_loop(self):
-        """Main worker loop for processing tasks"""
+        """Main worker loop — awaits queue directly instead of polling"""
         while self._running:
             try:
-                task = await asyncio.wait_for(self._task_queue.get(), timeout=1.0)
+                # Create two awaitables: next task OR stop signal
+                get_task = asyncio.ensure_future(self._task_queue.get())
+                stop_wait = asyncio.ensure_future(self._stop_event.wait())
+
+                done, pending = await asyncio.wait(
+                    {get_task, stop_wait},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                # Cancel whichever didn't finish
+                for fut in pending:
+                    fut.cancel()
+                    try:
+                        await fut
+                    except asyncio.CancelledError:
+                        pass
+
+                # If stop was signalled, exit
+                if stop_wait in done:
+                    # Drain the get_task result if it also completed
+                    break
+
+                # We got a task
+                task = get_task.result()
 
                 self._status = AgentStatus.BUSY
                 self._current_task = task
@@ -152,9 +179,6 @@ class Agent:
                     await self.coordinator.report_task_failed(task)
 
                 self._current_task = None
-                self._status = AgentStatus.IDLE
-
-            except asyncio.TimeoutError:
                 self._status = AgentStatus.IDLE
 
             except asyncio.CancelledError:
@@ -254,6 +278,10 @@ class AgentCoordinator:
         target_agent_type: Optional[AgentType] = None,
     ) -> str:
         """Submit a task to be processed by an appropriate agent"""
+        # Ensure done event exists for awaitable completion
+        if task._done_event is None:
+            task._done_event = asyncio.Event()
+
         async with self._lock:
             self._tasks[task.id] = task
 
@@ -265,6 +293,7 @@ class AgentCoordinator:
         if not agents:
             task.error = "No suitable agent found"
             task.completed_at = datetime.now()
+            task._done_event.set()
             return task.id
 
         agent_id = await self._select_best_agent(agents)
@@ -276,8 +305,41 @@ class AgentCoordinator:
         else:
             task.error = "Agent not found"
             task.completed_at = datetime.now()
+            task._done_event.set()
 
         return task.id
+
+    async def wait_for_task(
+        self,
+        task_id: str,
+        timeout: Optional[float] = None,
+    ) -> Optional[AgentTask]:
+        """
+        Await completion of a submitted task using asyncio.Event.
+
+        Replaces polling loops — callers should use:
+            task_id = await coordinator.submit_task(task)
+            result = await coordinator.wait_for_task(task_id, timeout=30)
+        instead of:
+            while not done: await asyncio.sleep(0.5)
+        """
+        task = self._tasks.get(task_id)
+        if task is None:
+            return None
+
+        if task._done_event is None:
+            task._done_event = asyncio.Event()
+
+        # Already completed
+        if task.completed_at is not None:
+            return task
+
+        try:
+            await asyncio.wait_for(task._done_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout waiting for task {task_id}")
+
+        return task
 
     async def _find_agents_for_task(self, task: AgentTask) -> List[str]:
         """Find agents capable of handling a task"""
@@ -309,6 +371,10 @@ class AgentCoordinator:
         async with self._lock:
             self._task_results.append(task)
 
+        # Signal awaiting callers
+        if task._done_event is not None:
+            task._done_event.set()
+
         for handler in self._event_handlers["task_complete"]:
             try:
                 if asyncio.iscoroutinefunction(handler):
@@ -322,6 +388,10 @@ class AgentCoordinator:
         """Report task failure"""
         async with self._lock:
             self._task_results.append(task)
+
+        # Signal awaiting callers
+        if task._done_event is not None:
+            task._done_event.set()
 
         for handler in self._event_handlers["task_failed"]:
             try:

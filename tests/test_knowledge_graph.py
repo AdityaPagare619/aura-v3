@@ -135,7 +135,9 @@ class TestKnowledgeGraph(unittest.TestCase):
     def tearDown(self):
         """Clean up temporary files"""
         import shutil
+        from src.utils.db_pool import close_all
 
+        close_all()
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
@@ -306,7 +308,9 @@ class TestTopologyMapper(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        from src.utils.db_pool import close_all
 
+        close_all()
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
@@ -349,7 +353,9 @@ class TestQueryEngine(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        from src.utils.db_pool import close_all
 
+        close_all()
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
@@ -465,7 +471,9 @@ class TestIntegration(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        from src.utils.db_pool import close_all
 
+        close_all()
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 

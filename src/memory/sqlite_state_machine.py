@@ -3,7 +3,6 @@ SQLite State Machine - Persistent State Management
 Uses SQLite as a state machine for memory persistence with transaction-based operations
 """
 
-import sqlite3
 import json
 import logging
 import threading
@@ -12,7 +11,8 @@ from typing import Any, Dict, List, Optional, Callable, Set
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
-from contextlib import contextmanager
+
+from src.utils.db_pool import get_connection, connection as db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -105,89 +105,70 @@ class SQLiteStateMachine:
 
     def _init_db(self, enable_wal: bool):
         """Initialize SQLite database"""
-        import os
+        with db_connection(self.db_path) as conn:
+            if enable_wal:
+                conn.execute("PRAGMA journal_mode=WAL")
 
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            conn.execute("PRAGMA synchronous=NORMAL")
 
-        conn = sqlite3.connect(self.db_path)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS states (
+                    name TEXT PRIMARY KEY,
+                    data TEXT,
+                    metadata TEXT,
+                    created_at REAL,
+                    updated_at REAL
+                )
+            """)
 
-        if enable_wal:
-            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS transitions (
+                    id TEXT PRIMARY KEY,
+                    from_state TEXT,
+                    to_state TEXT,
+                    trigger TEXT,
+                    transition_type TEXT,
+                    conditions TEXT,
+                    actions TEXT,
+                    timestamp REAL,
+                    metadata TEXT
+                )
+            """)
 
-        conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    id TEXT PRIMARY KEY,
+                    state_name TEXT,
+                    data TEXT,
+                    timestamp REAL,
+                    label TEXT
+                )
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS states (
-                name TEXT PRIMARY KEY,
-                data TEXT,
-                metadata TEXT,
-                created_at REAL,
-                updated_at REAL
-            )
-        """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_transitions_timestamp 
+                ON transitions(timestamp DESC)
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS transitions (
-                id TEXT PRIMARY KEY,
-                from_state TEXT,
-                to_state TEXT,
-                trigger TEXT,
-                transition_type TEXT,
-                conditions TEXT,
-                actions TEXT,
-                timestamp REAL,
-                metadata TEXT
-            )
-        """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_transitions_states 
+                ON transitions(from_state, to_state)
+            """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS snapshots (
-                id TEXT PRIMARY KEY,
-                state_name TEXT,
-                data TEXT,
-                timestamp REAL,
-                label TEXT
-            )
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_transitions_timestamp 
-            ON transitions(timestamp DESC)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_transitions_states 
-            ON transitions(from_state, to_state)
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_snapshots_state 
-            ON snapshots(state_name, timestamp DESC)
-        """)
-
-        conn.commit()
-        conn.close()
-
-    @contextmanager
-    def _transaction(self, conn: sqlite3.Connection):
-        """Context manager for transactions"""
-        try:
-            yield conn
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise StateTransitionError(f"Transaction failed: {e}")
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_snapshots_state 
+                ON snapshots(state_name, timestamp DESC)
+            """)
 
     def get_state(self, name: str) -> Optional[State]:
         """Get current state by name"""
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = get_connection(self.db_path)
             cursor = conn.execute(
                 "SELECT name, data, metadata, created_at, updated_at FROM states WHERE name = ?",
                 (name,),
             )
             row = cursor.fetchone()
-            conn.close()
 
             if row:
                 return State(
@@ -207,23 +188,19 @@ class SQLiteStateMachine:
             if create_snapshot and self._current_state_cache:
                 self._create_snapshot(self._current_state_cache.name)
 
-            conn = sqlite3.connect(self.db_path)
-            try:
-                with self._transaction(conn):
-                    conn.execute(
-                        """INSERT OR REPLACE INTO states 
-                           (name, data, metadata, created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?)""",
-                        (
-                            state.name,
-                            json.dumps(state.data),
-                            json.dumps(state.metadata),
-                            state.created_at,
-                            state.updated_at,
-                        ),
-                    )
-            finally:
-                conn.close()
+            with db_connection(self.db_path) as conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO states 
+                       (name, data, metadata, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        state.name,
+                        json.dumps(state.data),
+                        json.dumps(state.metadata),
+                        state.created_at,
+                        state.updated_at,
+                    ),
+                )
 
             self._current_state_cache = state
             return state
@@ -261,28 +238,24 @@ class SQLiteStateMachine:
                 metadata=metadata or {},
             )
 
-            conn = sqlite3.connect(self.db_path)
-            try:
-                with self._transaction(conn):
-                    conn.execute(
-                        """INSERT INTO transitions 
-                           (id, from_state, to_state, trigger, transition_type, 
-                            conditions, actions, timestamp, metadata)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            transition.id,
-                            transition.from_state,
-                            transition.to_state,
-                            transition.trigger,
-                            transition.transition_type.value,
-                            json.dumps(transition.conditions),
-                            json.dumps(transition.actions),
-                            transition.timestamp,
-                            json.dumps(transition.metadata),
-                        ),
-                    )
-            finally:
-                conn.close()
+            with db_connection(self.db_path) as conn:
+                conn.execute(
+                    """INSERT INTO transitions 
+                       (id, from_state, to_state, trigger, transition_type, 
+                        conditions, actions, timestamp, metadata)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        transition.id,
+                        transition.from_state,
+                        transition.to_state,
+                        transition.trigger,
+                        transition.transition_type.value,
+                        json.dumps(transition.conditions),
+                        json.dumps(transition.actions),
+                        transition.timestamp,
+                        json.dumps(transition.metadata),
+                    ),
+                )
 
             handlers = self._transition_handlers.get(to_state, [])
             for handler in handlers:
@@ -305,7 +278,7 @@ class SQLiteStateMachine:
         limit: int = 100,
     ) -> List[Transition]:
         """Get transition history"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         if state_name:
             cursor = conn.execute(
@@ -343,7 +316,6 @@ class SQLiteStateMachine:
                 )
             )
 
-        conn.close()
         return results
 
     def _create_snapshot(self, state_name: str, label: str = ""):
@@ -360,37 +332,33 @@ class SQLiteStateMachine:
             label=label,
         )
 
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with self._transaction(conn):
-                conn.execute(
-                    """INSERT INTO snapshots (id, state_name, data, timestamp, label)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (
-                        snapshot.id,
-                        snapshot.state_name,
-                        snapshot.data,
-                        snapshot.timestamp,
-                        snapshot.label,
-                    ),
-                )
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """INSERT INTO snapshots (id, state_name, data, timestamp, label)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    snapshot.id,
+                    snapshot.state_name,
+                    snapshot.data,
+                    snapshot.timestamp,
+                    snapshot.label,
+                ),
+            )
 
-                conn.execute(
-                    """DELETE FROM snapshots 
-                       WHERE state_name = ? AND id NOT IN (
-                           SELECT id FROM snapshots 
-                           WHERE state_name = ? 
-                           ORDER BY timestamp DESC 
-                           LIMIT ?
-                       )""",
-                    (state_name, state_name, self.max_snapshots),
-                )
-        finally:
-            conn.close()
+            conn.execute(
+                """DELETE FROM snapshots 
+                   WHERE state_name = ? AND id NOT IN (
+                       SELECT id FROM snapshots 
+                       WHERE state_name = ? 
+                       ORDER BY timestamp DESC 
+                       LIMIT ?
+                   )""",
+                (state_name, state_name, self.max_snapshots),
+            )
 
     def rollback(self, state_name: str, snapshot_id: str = None) -> State:
         """Rollback to previous snapshot"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         if snapshot_id:
             cursor = conn.execute(
@@ -408,7 +376,6 @@ class SQLiteStateMachine:
             )
 
         row = cursor.fetchone()
-        conn.close()
 
         if not row:
             raise StateMachineError(f"No snapshot found for state '{state_name}'")
@@ -425,7 +392,7 @@ class SQLiteStateMachine:
 
     def get_snapshots(self, state_name: str) -> List[StateSnapshot]:
         """Get available snapshots for state"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             """SELECT id, state_name, data, timestamp, label 
                FROM snapshots 
@@ -446,7 +413,6 @@ class SQLiteStateMachine:
                 )
             )
 
-        conn.close()
         return results
 
     def query_states(
@@ -455,7 +421,7 @@ class SQLiteStateMachine:
         limit: int = 100,
     ) -> List[State]:
         """Query states with optional predicate"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             "SELECT name, data, metadata, created_at, updated_at FROM states LIMIT ?",
             (limit,),
@@ -474,20 +440,17 @@ class SQLiteStateMachine:
             if predicate is None or predicate(state):
                 results.append(state)
 
-        conn.close()
         return results
 
     def get_stats(self) -> Dict[str, Any]:
         """Get state machine statistics"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         states_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
         transitions_count = conn.execute("SELECT COUNT(*) FROM transitions").fetchone()[
             0
         ]
         snapshots_count = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
-
-        conn.close()
 
         return {
             "states": states_count,

@@ -10,6 +10,7 @@ what's important to them, and their emotional relationship with actions.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Dict, List, Any, Optional, Tuple
@@ -320,6 +321,10 @@ class NeuralValidatedPlanner:
         self.neural_memory = neural_memory
         self.validator = NeuralPatternValidator(neural_memory)
 
+        # Schema context cache — avoids rebuilding on every LLM call
+        self._cached_schema_context: Optional[str] = None
+        self._schema_cache_hash: Optional[str] = None
+
         # Settings
         self.max_revision_attempts = 2
         self.min_approval_confidence = 0.6
@@ -369,8 +374,8 @@ class NeuralValidatedPlanner:
                 confidence=0.3,
             )
 
-        # Build tool schema for prompt
-        tool_schema = self._build_tool_schema(available_tools)
+        # Build tool schema for prompt (cached)
+        tool_schema = self._get_schema_context(available_tools)
 
         prompt = f"""You are AURA, a personal AI assistant.
 
@@ -434,7 +439,7 @@ Feedback:
 {chr(10).join(validation.suggested_revisions)}
 
 Available tools:
-{self._build_tool_schema(available_tools)}
+{self._get_schema_context(available_tools)}
 
 Generate revised JSON plan:
 {{
@@ -465,6 +470,29 @@ Generate revised JSON plan:
             logger.error(f"Plan revision error: {e}")
             # Return original plan if revision fails
             return plan
+
+    def _get_schema_context(self, tools: List[Dict]) -> str:
+        """
+        Get tool schema context, using cache when tools haven't changed.
+
+        Tools are registered once at startup, so the schema rarely changes.
+        Caching avoids rebuilding the same string on every LLM call.
+        """
+        # Compute a hash of the current tool list
+        tools_key = hashlib.sha256(
+            json.dumps(tools, sort_keys=True, default=str).encode()
+        ).hexdigest()
+
+        if (
+            tools_key == self._schema_cache_hash
+            and self._cached_schema_context is not None
+        ):
+            return self._cached_schema_context
+
+        # Cache miss — rebuild
+        self._cached_schema_context = self._build_tool_schema(tools)
+        self._schema_cache_hash = tools_key
+        return self._cached_schema_context
 
     def _build_tool_schema(self, tools: List[Dict]) -> str:
         """Build tool schema for prompt"""

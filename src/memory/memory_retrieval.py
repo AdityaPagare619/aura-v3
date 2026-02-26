@@ -105,31 +105,45 @@ class UnifiedMemoryRetrieval:
                         total_found=len(working_results),
                     )
 
-        # Phase 2: Episodic memory (fast)
-        episodic_results = []
+        # Phases 2-4: Run independent memory searches concurrently
+        # Each searches a DIFFERENT backend, so they can safely overlap.
+        concurrent_coros = []
+        coro_labels = []
+
         if self.episodic:
-            episodic_results = await self._search_episodic_async(query)
-            all_results.extend(episodic_results)
-            if episodic_results and not primary_source:
-                primary_source = MemorySource.EPISODIC
+            concurrent_coros.append(self._search_episodic_async(query))
+            coro_labels.append(MemorySource.EPISODIC)
 
-        # Phase 3: Semantic memory (medium)
-        semantic_results = []
         if self.semantic:
-            semantic_results = await self._search_semantic_async(query)
-            all_results.extend(semantic_results)
-            if semantic_results and not primary_source:
-                primary_source = MemorySource.SEMANTIC
+            concurrent_coros.append(self._search_semantic_async(query))
+            coro_labels.append(MemorySource.SEMANTIC)
 
-        # Phase 4: Skill memory (if procedural)
-        skill_results = []
         if query.procedural and self.skill:
-            skill_results = await self._search_skill_async(query)
-            all_results.extend(skill_results)
-            if skill_results and not primary_source:
-                primary_source = MemorySource.SKILL
+            concurrent_coros.append(self._search_skill_async(query))
+            coro_labels.append(MemorySource.SKILL)
 
-        # Phase 5: Ancestor memory (lazy, if needed)
+        # Gather all independent searches at once
+        concurrent_results = await asyncio.gather(
+            *concurrent_coros, return_exceptions=True
+        )
+
+        episodic_results = []
+        semantic_results = []
+
+        for label, result in zip(coro_labels, concurrent_results):
+            if isinstance(result, Exception):
+                logger.warning(f"Memory search failed for {label.value}: {result}")
+                continue
+            all_results.extend(result)
+            if result and not primary_source:
+                primary_source = label
+            # Track episodic/semantic for Phase 5 gating
+            if label == MemorySource.EPISODIC:
+                episodic_results = result
+            elif label == MemorySource.SEMANTIC:
+                semantic_results = result
+
+        # Phase 5: Ancestor memory (lazy, only if episodic+semantic both empty)
         ancestor_results = []
         if not episodic_results and not semantic_results and self.ancestor:
             ancestor_results = await self._search_ancestor_async(query)

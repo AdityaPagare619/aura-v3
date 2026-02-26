@@ -3,7 +3,6 @@ Semantic Memory - Neocortex Analogue
 Slow consolidation, knowledge graph, concept hierarchies, preferences
 """
 
-import sqlite3
 import json
 import uuid
 import time
@@ -11,6 +10,8 @@ from typing import Dict, List, Optional, Any, Set, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
 import hashlib
+
+from src.utils.db_pool import get_connection, connection as db_connection
 
 
 @dataclass
@@ -73,65 +74,59 @@ class SemanticMemory:
 
     def _init_db(self):
         """Initialize database"""
-        import os
+        with db_connection(self.db_path) as conn:
+            # Facts table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS facts (
+                    id TEXT PRIMARY KEY,
+                    fact TEXT NOT NULL,
+                    entity_type TEXT,
+                    entities TEXT,
+                    relation TEXT,
+                    confidence REAL DEFAULT 0.5,
+                    evidence_count INTEGER DEFAULT 1,
+                    source_traces TEXT,
+                    created_at REAL
+                )
+            """)
 
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            # Concepts table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS concepts (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    category TEXT,
+                    attributes TEXT,
+                    related_concepts TEXT,
+                    confidence REAL DEFAULT 0.5,
+                    occurrence_count INTEGER DEFAULT 1,
+                    created_at REAL,
+                    last_accessed REAL
+                )
+            """)
 
-        conn = sqlite3.connect(self.db_path)
+            # Preferences table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS preferences (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    category TEXT DEFAULT 'general',
+                    confidence REAL DEFAULT 0.5,
+                    occurrence_count INTEGER DEFAULT 1,
+                    updated_at REAL
+                )
+            """)
 
-        # Facts table
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS facts (
-                id TEXT PRIMARY KEY,
-                fact TEXT NOT NULL,
-                entity_type TEXT,
-                entities TEXT,
-                relation TEXT,
-                confidence REAL DEFAULT 0.5,
-                evidence_count INTEGER DEFAULT 1,
-                source_traces TEXT,
-                created_at REAL
+            # Indices
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_facts_entity ON facts(entity_type)"
             )
-        """)
-
-        # Concepts table
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS concepts (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                category TEXT,
-                attributes TEXT,
-                related_concepts TEXT,
-                confidence REAL DEFAULT 0.5,
-                occurrence_count INTEGER DEFAULT 1,
-                created_at REAL,
-                last_accessed REAL
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_concepts_name ON concepts(name)"
             )
-        """)
-
-        # Preferences table
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS preferences (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                category TEXT DEFAULT 'general',
-                confidence REAL DEFAULT 0.5,
-                occurrence_count INTEGER DEFAULT 1,
-                updated_at REAL
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_prefs_category ON preferences(category)"
             )
-        """)
-
-        # Indices
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_facts_entity ON facts(entity_type)"
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_concepts_name ON concepts(name)")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_prefs_category ON preferences(category)"
-        )
-
-        conn.commit()
-        conn.close()
 
     def consolidate(self, episodic_trace) -> Optional[SemanticKnowledge]:
         """Extract semantic knowledge from episodic trace"""
@@ -298,128 +293,107 @@ class SemanticMemory:
 
     def _store_knowledge(self, knowledge: SemanticKnowledge):
         """Store knowledge in database with transaction"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO facts
-                    (id, fact, entity_type, entities, relation, confidence, evidence_count, source_traces, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        knowledge.id,
-                        knowledge.fact,
-                        knowledge.entity_type,
-                        json.dumps(knowledge.entities),
-                        knowledge.relation,
-                        knowledge.confidence,
-                        knowledge.evidence_count,
-                        json.dumps(knowledge.source_trace_ids),
-                        knowledge.created_at,
-                    ),
-                )
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        with db_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO facts
+                (id, fact, entity_type, entities, relation, confidence, evidence_count, source_traces, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    knowledge.id,
+                    knowledge.fact,
+                    knowledge.entity_type,
+                    json.dumps(knowledge.entities),
+                    knowledge.relation,
+                    knowledge.confidence,
+                    knowledge.evidence_count,
+                    json.dumps(knowledge.source_trace_ids),
+                    knowledge.created_at,
+                ),
+            )
 
     def _learn_concept(self, name: str, context: Dict = None):
         """Learn or update a concept with transaction"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                # Check existing
-                cursor = conn.execute(
-                    "SELECT id, occurrence_count, confidence FROM concepts WHERE name = ?",
-                    (name,),
+        with db_connection(self.db_path) as conn:
+            # Check existing
+            cursor = conn.execute(
+                "SELECT id, occurrence_count, confidence FROM concepts WHERE name = ?",
+                (name,),
+            )
+            row = cursor.fetchone()
+
+            if row:
+                # Update existing
+                new_count = row[1] + 1
+                new_confidence = min(1.0, row[2] + 0.1)
+                conn.execute(
+                    """
+                    UPDATE concepts 
+                    SET occurrence_count = ?, confidence = ?, last_accessed = ?
+                    WHERE name = ?
+                """,
+                    (new_count, new_confidence, time.time(), name),
                 )
-                row = cursor.fetchone()
+            else:
+                # Create new
+                concept = Concept(name=name)
+                if context:
+                    concept.category = context.get("category", "general")
 
-                if row:
-                    # Update existing
-                    new_count = row[1] + 1
-                    new_confidence = min(1.0, row[2] + 0.1)
-                    conn.execute(
-                        """
-                        UPDATE concepts 
-                        SET occurrence_count = ?, confidence = ?, last_accessed = ?
-                        WHERE name = ?
-                    """,
-                        (new_count, new_confidence, time.time(), name),
-                    )
-                else:
-                    # Create new
-                    concept = Concept(name=name)
-                    if context:
-                        concept.category = context.get("category", "general")
-
-                    conn.execute(
-                        """
-                        INSERT INTO concepts
-                        (id, name, category, attributes, related_concepts, confidence, occurrence_count, created_at, last_accessed)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                        (
-                            concept.id,
-                            concept.name,
-                            concept.category,
-                            json.dumps({}),
-                            json.dumps([]),
-                            concept.confidence,
-                            concept.occurrence_count,
-                            concept.created_at,
-                            concept.last_accessed,
-                        ),
-                    )
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+                conn.execute(
+                    """
+                    INSERT INTO concepts
+                    (id, name, category, attributes, related_concepts, confidence, occurrence_count, created_at, last_accessed)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        concept.id,
+                        concept.name,
+                        concept.category,
+                        json.dumps({}),
+                        json.dumps([]),
+                        concept.confidence,
+                        concept.occurrence_count,
+                        concept.created_at,
+                        concept.last_accessed,
+                    ),
+                )
 
     def _update_preference(self, key: str, value: Any, category: str = "general"):
         """Update preference with transaction"""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                cursor = conn.execute(
-                    "SELECT occurrence_count, confidence FROM preferences WHERE key = ?",
-                    (key,),
-                )
-                row = cursor.fetchone()
+        with db_connection(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT occurrence_count, confidence FROM preferences WHERE key = ?",
+                (key,),
+            )
+            row = cursor.fetchone()
 
-                if row:
-                    new_count = row[0] + 1
-                    new_confidence = min(1.0, row[1] + 0.1)
-                    conn.execute(
-                        """
-                        UPDATE preferences
-                        SET value = ?, occurrence_count = ?, confidence = ?, updated_at = ?
-                        WHERE key = ?
-                    """,
-                        (
-                            json.dumps(value),
-                            new_count,
-                            new_confidence,
-                            time.time(),
-                            key,
-                        ),
-                    )
-                else:
-                    conn.execute(
-                        """
-                        INSERT INTO preferences (key, value, category, confidence, occurrence_count, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                        (key, json.dumps(value), category, 0.5, 1, time.time()),
-                    )
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+            if row:
+                new_count = row[0] + 1
+                new_confidence = min(1.0, row[1] + 0.1)
+                conn.execute(
+                    """
+                    UPDATE preferences
+                    SET value = ?, occurrence_count = ?, confidence = ?, updated_at = ?
+                    WHERE key = ?
+                """,
+                    (
+                        json.dumps(value),
+                        new_count,
+                        new_confidence,
+                        time.time(),
+                        key,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO preferences (key, value, category, confidence, occurrence_count, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                    (key, json.dumps(value), category, 0.5, 1, time.time()),
+                )
 
     def generalize(self, traces: List) -> Optional[SemanticKnowledge]:
         """Create generalization from multiple episodes"""
@@ -462,7 +436,7 @@ class SemanticMemory:
 
     def retrieve(self, query: str, limit: int = 5) -> List[SemanticKnowledge]:
         """Retrieve relevant knowledge"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         query_lower = query.lower()
         query_words = query_lower.split()
@@ -495,15 +469,13 @@ class SemanticMemory:
                 }
             )
 
-        conn.close()
-
         # Sort by combined score
         results.sort(key=lambda x: x["confidence"] * 0.5 + x["relevance"], reverse=True)
         return results[:limit]
 
     def get_preferences(self, category: str = None) -> Dict:
         """Get preferences"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         if category:
             cursor = conn.execute(
@@ -525,12 +497,11 @@ class SemanticMemory:
                 value = row[1]
             results[row[0]] = {"value": value, "category": row[2], "confidence": row[3]}
 
-        conn.close()
         return results
 
     def get_concept(self, name: str) -> Optional[Concept]:
         """Get concept by name"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
         cursor = conn.execute(
             """
             SELECT id, name, category, attributes, related_concepts, confidence, occurrence_count, created_at, last_accessed
@@ -540,7 +511,6 @@ class SemanticMemory:
         )
 
         row = cursor.fetchone()
-        conn.close()
 
         if row:
             return Concept(
@@ -558,13 +528,11 @@ class SemanticMemory:
 
     def get_stats(self) -> Dict:
         """Get memory statistics"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection(self.db_path)
 
         facts_count = conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
         concepts_count = conn.execute("SELECT COUNT(*) FROM concepts").fetchone()[0]
         prefs_count = conn.execute("SELECT COUNT(*) FROM preferences").fetchone()[0]
-
-        conn.close()
 
         return {
             "facts": facts_count,
