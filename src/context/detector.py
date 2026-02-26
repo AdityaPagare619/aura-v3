@@ -1,14 +1,24 @@
 """
 AURA Context Detector
 Detects time, location, activity, and provides context-aware behavior hints
+
+Unified with ContextProvider: Uses real sensor data from ContextProvider
+instead of stub methods. This is the behavior/decision layer on top of
+ContextProvider's data-gathering layer.
 """
 
 from datetime import datetime, time
 from enum import Enum
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, TYPE_CHECKING
 import asyncio
 import json
 import os
+import logging
+
+if TYPE_CHECKING:
+    from src.context.context_provider import ContextProvider
+
+logger = logging.getLogger(__name__)
 
 
 class TimeOfDay(Enum):
@@ -46,7 +56,23 @@ class BehaviorMode(Enum):
 
 
 class ContextDetector:
-    def __init__(self, config_path: Optional[str] = None):
+    """
+    High-level context detector that provides behavior modes and decision hints.
+
+    Unified architecture: Uses ContextProvider for real sensor data instead of
+    duplicating data-gathering logic. ContextDetector focuses on:
+    - Behavior mode classification (professional, personal, quiet, driving)
+    - Action confirmation decisions
+    - Config management (work hours, known locations)
+
+    ContextProvider handles the low-level data gathering from Termux/Android APIs.
+    """
+
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        context_provider: Optional["ContextProvider"] = None,
+    ):
         self.config_path = config_path or os.path.join(
             os.path.dirname(__file__), "..", "config", "context_config.json"
         )
@@ -56,6 +82,9 @@ class ContextDetector:
         self._cached_context: Optional[Dict] = None
         self._cache_timestamp: float = 0
         self._cache_ttl: int = 60
+
+        # UNIFIED: Use ContextProvider for real data
+        self._context_provider = context_provider
 
     def _load_config(self):
         self.config = {
@@ -124,6 +153,26 @@ class ContextDetector:
             return LocationType.UNKNOWN
 
     async def _get_android_location(self) -> Optional[Dict]:
+        """Get location data from ContextProvider (unified architecture)."""
+        if self._context_provider is None:
+            # Lazy import to avoid circular imports
+            from src.context.context_provider import get_context_provider
+
+            self._context_provider = get_context_provider()
+
+        try:
+            ctx = await self._context_provider.get_current_context()
+            if ctx.location and ctx.location.latitude is not None:
+                return {
+                    "lat": ctx.location.latitude,
+                    "lng": ctx.location.longitude,
+                    "speed": ctx.location.speed or 0,
+                    "accuracy": ctx.location.accuracy,
+                    "place_name": ctx.location.place_name,
+                }
+        except Exception as e:
+            logger.warning(f"Error getting location from ContextProvider: {e}")
+
         return None
 
     def _is_at_home(self, location: Dict) -> bool:
@@ -190,6 +239,36 @@ class ContextDetector:
             return ActivityType.IDLE
 
     async def _get_sensor_data(self) -> Optional[Dict]:
+        """Get sensor/activity data from ContextProvider (unified architecture)."""
+        if self._context_provider is None:
+            # Lazy import to avoid circular imports
+            from src.context.context_provider import get_context_provider
+
+            self._context_provider = get_context_provider()
+
+        try:
+            ctx = await self._context_provider.get_current_context()
+            data = {}
+
+            # Activity data
+            if ctx.activity:
+                data["activity"] = ctx.activity.activity_type
+                data["speed"] = ctx.location.speed if ctx.location else 0
+
+            # Device data
+            if ctx.device:
+                data["screen_on"] = ctx.device.screen_on
+                data["battery_level"] = ctx.device.battery_level
+                data["battery_state"] = ctx.device.battery_state
+
+            # Social/call data (in_call not directly available, but could be inferred)
+            data["in_call"] = False  # Would need call state from ContextProvider
+
+            return data if data else None
+
+        except Exception as e:
+            logger.warning(f"Error getting sensor data from ContextProvider: {e}")
+
         return None
 
     def _is_sleeping(self, sensor_data: Dict) -> bool:
@@ -335,3 +414,29 @@ class ContextDetector:
 
     def set_work_hours(self, start: int, end: int):
         self.update_config("work_hours", {"start": start, "end": end})
+
+    def set_context_provider(self, provider: "ContextProvider"):
+        """
+        Set the ContextProvider instance for unified data access.
+
+        This allows explicit wiring when you want to share a ContextProvider
+        instance across multiple components.
+        """
+        self._context_provider = provider
+
+
+# Global instance for convenience
+_context_detector: Optional[ContextDetector] = None
+
+
+def get_context_detector() -> ContextDetector:
+    """
+    Get or create the global ContextDetector instance.
+
+    The ContextDetector will automatically connect to the global ContextProvider
+    when first used.
+    """
+    global _context_detector
+    if _context_detector is None:
+        _context_detector = ContextDetector()
+    return _context_detector
