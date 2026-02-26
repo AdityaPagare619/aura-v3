@@ -44,14 +44,106 @@ class NeuralValidationResult:
 
 
 @dataclass
-class JSONPlan:
-    """Structured plan from LLM"""
+class ToolAction:
+    """A single action in a plan (unified from tool_orchestrator)"""
 
-    reasoning: str
     action: str
-    params: Dict[str, Any]
-    confidence: float
+    params: Dict[str, Any] = field(default_factory=dict)
+    tool_name: str = ""
+    description: str = ""
+
+
+@dataclass
+class JSONPlan:
+    """
+    Unified structured plan from LLM.
+
+    Supports both:
+    - Single-action mode (via `action` and `params` fields) - legacy/simple
+    - Multi-action mode (via `actions` list) - orchestrator style
+
+    This is the canonical implementation - use this instead of duplicates.
+    """
+
+    reasoning: str = ""
+
+    # Single-action support (legacy compatibility)
+    action: str = ""
+    params: Dict[str, Any] = field(default_factory=dict)
+
+    # Multi-action support (from tool_orchestrator)
+    actions: List[ToolAction] = field(default_factory=list)
+
+    confidence: float = 0.5
     alternatives: List[Dict] = field(default_factory=list)
+    requires_confirmation: bool = False
+
+    def get_primary_action(self) -> str:
+        """Get primary action - prefers single action, falls back to first in actions list"""
+        if self.action:
+            return self.action
+        if self.actions:
+            return self.actions[0].action
+        return ""
+
+    def get_primary_params(self) -> Dict[str, Any]:
+        """Get primary params - prefers single params, falls back to first in actions list"""
+        if self.params:
+            return self.params
+        if self.actions:
+            return self.actions[0].params
+        return {}
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary representation"""
+        return {
+            "reasoning": self.reasoning,
+            "action": self.get_primary_action(),
+            "params": self.get_primary_params(),
+            "actions": [
+                {"action": a.action, "params": a.params, "tool": a.tool_name}
+                for a in self.actions
+            ],
+            "confidence": self.confidence,
+            "requires_confirmation": self.requires_confirmation,
+            "alternatives": self.alternatives,
+        }
+
+    @classmethod
+    def from_single_action(
+        cls,
+        reasoning: str,
+        action: str,
+        params: Dict[str, Any],
+        confidence: float = 0.5,
+        alternatives: Optional[List[Dict]] = None,
+    ) -> "JSONPlan":
+        """Create plan from single action (convenience factory)"""
+        return cls(
+            reasoning=reasoning,
+            action=action,
+            params=params,
+            confidence=confidence,
+            alternatives=alternatives or [],
+        )
+
+    @classmethod
+    def from_tool_actions(
+        cls,
+        reasoning: str,
+        actions: List[ToolAction],
+        confidence: float = 0.5,
+        requires_confirmation: bool = False,
+        alternatives: Optional[List[Dict]] = None,
+    ) -> "JSONPlan":
+        """Create plan from multiple tool actions (orchestrator style)"""
+        return cls(
+            reasoning=reasoning,
+            actions=actions,
+            confidence=confidence,
+            requires_confirmation=requires_confirmation,
+            alternatives=alternatives or [],
+        )
 
 
 class NeuralPatternValidator:

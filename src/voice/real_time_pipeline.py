@@ -943,6 +943,160 @@ class RealtimePipelineFactory:
         return RealtimeVoicePipeline(config)
 
 
+class TelegramVoiceAdapter:
+    """
+    Adapter for processing Telegram voice messages using the real-time pipeline.
+
+    This is a modern replacement for the legacy TelegramVoiceHandler, providing
+    the same interface but using the production-grade RealtimeVoicePipeline.
+
+    Usage:
+        pipeline = RealtimeVoicePipeline(config)
+        await pipeline.initialize()
+
+        adapter = TelegramVoiceAdapter(pipeline)
+        response = await adapter.handle_voice_message(telegram_message)
+    """
+
+    def __init__(
+        self,
+        pipeline: RealtimeVoicePipeline,
+        download_dir: Optional[str] = None,
+    ):
+        """
+        Initialize the Telegram voice adapter.
+
+        Args:
+            pipeline: The RealtimeVoicePipeline instance to use
+            download_dir: Directory to download voice files to
+        """
+        self.pipeline = pipeline
+        self._download_dir = Path(
+            download_dir or "/data/data/com.termux/files/home/.cache/aura/voice"
+        )
+        self._download_dir.mkdir(parents=True, exist_ok=True)
+        self._intent_handler: Optional[Callable] = None
+
+    def set_intent_handler(self, handler: Callable) -> None:
+        """Set the intent handler for processing transcribed text."""
+        self._intent_handler = handler
+
+    async def handle_voice_message(
+        self,
+        message: Any,
+        intent_handler: Optional[Callable] = None,
+    ) -> str:
+        """
+        Process incoming voice message from Telegram.
+
+        Args:
+            message: Telegram message object with voice attribute
+            intent_handler: Optional override for intent processing
+
+        Returns:
+            Response text that was generated
+        """
+        voice_file = await self._download_voice(message)
+
+        if not voice_file:
+            return "Failed to download voice message."
+
+        try:
+            response = await self.process_voice_file(
+                voice_file,
+                intent_handler=intent_handler,
+            )
+            return response
+        finally:
+            # Clean up downloaded file
+            Path(voice_file).unlink(missing_ok=True)
+
+    async def process_voice_file(
+        self,
+        voice_file_path: str,
+        intent_handler: Optional[Callable] = None,
+    ) -> str:
+        """
+        Process a voice file through the pipeline.
+
+        Args:
+            voice_file_path: Path to the voice audio file
+            intent_handler: Optional handler for processing transcribed text
+
+        Returns:
+            Response text
+        """
+        handler = intent_handler or self._intent_handler
+
+        logger.info(f"Processing voice message: {voice_file_path}")
+
+        try:
+            # Use the STT processor from the pipeline
+            result = await self.pipeline.stt.transcribe_file(voice_file_path)
+            text = result.text if result else ""
+
+            if not text:
+                response = "I couldn't understand that. Please try again."
+            else:
+                logger.info(f"Transcribed: {text}")
+
+                if handler:
+                    response = await handler(text)
+                else:
+                    # Use the pipeline's LLM handler if available
+                    response = await self.pipeline.process_text(text)
+
+            # Speak the response if TTS is available
+            if self.pipeline.tts_handler:
+                await self.pipeline.speak(response)
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Voice processing error: {e}")
+            return "Sorry, I had trouble processing that."
+
+    async def _download_voice(self, message: Any) -> Optional[str]:
+        """
+        Download voice message to local file.
+
+        Args:
+            message: Telegram message object with voice/audio
+
+        Returns:
+            Path to downloaded file or None on error
+        """
+        try:
+            bot = message.bot
+
+            # Support both voice messages and audio files
+            if hasattr(message, "voice") and message.voice:
+                file = await bot.get_file(message.voice.file_id)
+            elif hasattr(message, "audio") and message.audio:
+                file = await bot.get_file(message.audio.file_id)
+            else:
+                logger.error("Message has no voice or audio")
+                return None
+
+            temp_file = self._download_dir / f"voice_{message.message_id}.ogg"
+
+            await file.download_to_drive(str(temp_file))
+
+            return str(temp_file)
+
+        except Exception as e:
+            logger.error(f"Voice download error: {e}")
+            return None
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get adapter and pipeline status."""
+        return {
+            "download_dir": str(self._download_dir),
+            "has_intent_handler": self._intent_handler is not None,
+            "pipeline_status": self.pipeline.get_status(),
+        }
+
+
 __all__ = [
     "RealtimePipelineConfig",
     "RealtimeVoicePipeline",
@@ -950,4 +1104,5 @@ __all__ = [
     "PipelineMode",
     "PipelineState",
     "LatencyBudget",
+    "TelegramVoiceAdapter",
 ]

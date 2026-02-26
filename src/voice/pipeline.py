@@ -1,6 +1,29 @@
 """
-AURA Voice System - Voice Pipeline
+AURA Voice System - Voice Pipeline (DEPRECATED)
 Coordinates STT, TTS, and hot word detection
+
+DEPRECATION NOTICE:
+    This module is deprecated and will be removed in a future version.
+    Please migrate to the real-time pipeline:
+
+    BEFORE (deprecated):
+        from aura.voice import VoicePipeline, TelegramVoiceHandler
+        pipeline = VoicePipeline(config)
+        handler = TelegramVoiceHandler(pipeline)
+
+    AFTER (recommended):
+        from aura.voice import RealtimeVoicePipeline, TelegramVoiceAdapter
+        pipeline = RealtimeVoicePipeline(config)
+        adapter = TelegramVoiceAdapter(pipeline)
+
+    The new pipeline provides:
+    - Streaming STT/TTS with lower latency
+    - Voice Activity Detection (VAD)
+    - Multiple operating modes (push-to-talk, wake-word, continuous)
+    - Latency budget tracking
+    - Emergency hotword detection
+
+    See real_time_pipeline.py for documentation.
 """
 
 import asyncio
@@ -9,6 +32,7 @@ import logging
 import os
 import tempfile
 import threading
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -18,6 +42,14 @@ from .tts import TTSConfig, TTSEngine, TTSQueueManager
 from .hotword import HotWordConfig, HotWordDetector
 
 logger = logging.getLogger(__name__)
+
+# Emit deprecation warning on import
+warnings.warn(
+    "The voice.pipeline module is deprecated. "
+    "Use voice.real_time_pipeline (RealtimeVoicePipeline, TelegramVoiceAdapter) instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 @dataclass

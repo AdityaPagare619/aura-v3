@@ -15,10 +15,17 @@ This orchestrator:
 import asyncio
 import json
 import logging
+import warnings
 from typing import Dict, List, Any, Optional, Callable, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
+
+# Import unified JSONPlan and ToolAction from neural_validated_planner
+from src.core.neural_validated_planner import (
+    JSONPlan,
+    ToolAction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,36 +51,24 @@ class ActionRisk(Enum):
     DANGEROUS = "dangerous"  # Could cause harm
 
 
-@dataclass
-class ToolAction:
-    """A single action in a plan"""
+# DEPRECATED: These are kept for backward compatibility
+# Use imports from src.core.neural_validated_planner instead
+def _deprecated_tool_action():
+    warnings.warn(
+        "ToolAction from tool_orchestrator is deprecated. "
+        "Import from src.core.neural_validated_planner instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
-    action: str
-    params: Dict[str, Any] = field(default_factory=dict)
-    tool_name: str = ""
-    description: str = ""
 
-
-@dataclass
-class JSONPlan:
-    """Structured plan from LLM"""
-
-    reasoning: str = ""
-    actions: List[ToolAction] = field(default_factory=list)
-    confidence: float = 0.5
-    alternatives: List[Dict] = field(default_factory=list)
-    requires_confirmation: bool = False
-
-    def to_dict(self) -> Dict:
-        return {
-            "reasoning": self.reasoning,
-            "actions": [
-                {"action": a.action, "params": a.params, "tool": a.tool_name}
-                for a in self.actions
-            ],
-            "confidence": self.confidence,
-            "requires_confirmation": self.requires_confirmation,
-        }
+def _deprecated_json_plan():
+    warnings.warn(
+        "JSONPlan from tool_orchestrator is deprecated. "
+        "Import from src.core.neural_validated_planner instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 @dataclass

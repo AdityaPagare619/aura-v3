@@ -51,6 +51,23 @@ class EventStatus(Enum):
     EXPIRED = "expired"
 
 
+def _datetime_to_iso(dt: Optional[datetime]) -> Optional[str]:
+    """Convert datetime to ISO format string for serialization."""
+    return dt.isoformat() if dt else None
+
+
+def _iso_to_datetime(s: Optional[str]) -> Optional[datetime]:
+    """Convert ISO format string back to datetime."""
+    if s is None:
+        return None
+    if isinstance(s, datetime):
+        return s
+    try:
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
 @dataclass
 class LifeEvent:
     """A life event that AURA tracks"""
@@ -90,6 +107,83 @@ class LifeEvent:
     recurring_pattern: Optional[str] = None
     tags: List[str] = field(default_factory=list)
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize LifeEvent to a JSON-compatible dictionary."""
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "category": self.category.value,
+            "priority": self.priority.value,
+            "status": self.status.value,
+            "created_at": _datetime_to_iso(self.created_at),
+            "event_date": _datetime_to_iso(self.event_date),
+            "deadline": _datetime_to_iso(self.deadline),
+            "completed_at": _datetime_to_iso(self.completed_at),
+            "source": self.source,
+            "source_app": self.source_app,
+            "related_people": list(self.related_people),
+            "related_topics": list(self.related_topics),
+            "location": self.location,
+            "actions_taken": list(self.actions_taken),
+            "notes": list(self.notes),
+            "insights": dict(self.insights),
+            "prep_status": self.prep_status,
+            "is_recurring": self.is_recurring,
+            "recurring_pattern": self.recurring_pattern,
+            "tags": list(self.tags),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LifeEvent":
+        """Deserialize LifeEvent from a dictionary."""
+        # Handle category - can be string value or Enum
+        category = data.get("category", EventCategory.PERSONAL)
+        if isinstance(category, str):
+            category = EventCategory(category)
+
+        # Handle priority - can be int value or Enum
+        priority = data.get("priority", EventPriority.MEDIUM)
+        if isinstance(priority, int):
+            priority = EventPriority(priority)
+        elif isinstance(priority, str):
+            # Handle case where priority was saved as string representation
+            priority = (
+                EventPriority[priority.upper()]
+                if priority.upper() in EventPriority.__members__
+                else EventPriority.MEDIUM
+            )
+
+        # Handle status - can be string value or Enum
+        status = data.get("status", EventStatus.PENDING)
+        if isinstance(status, str):
+            status = EventStatus(status)
+
+        return cls(
+            id=data.get("id", str(uuid.uuid4())[:8]),
+            title=data.get("title", ""),
+            description=data.get("description", ""),
+            category=category,
+            priority=priority,
+            status=status,
+            created_at=_iso_to_datetime(data.get("created_at")) or datetime.now(),
+            event_date=_iso_to_datetime(data.get("event_date")),
+            deadline=_iso_to_datetime(data.get("deadline")),
+            completed_at=_iso_to_datetime(data.get("completed_at")),
+            source=data.get("source", "manual"),
+            source_app=data.get("source_app"),
+            related_people=list(data.get("related_people", [])),
+            related_topics=list(data.get("related_topics", [])),
+            location=data.get("location"),
+            actions_taken=list(data.get("actions_taken", [])),
+            notes=list(data.get("notes", [])),
+            insights=dict(data.get("insights", {})),
+            prep_status=data.get("prep_status", "not_started"),
+            is_recurring=data.get("is_recurring", False),
+            recurring_pattern=data.get("recurring_pattern"),
+            tags=list(data.get("tags", [])),
+        )
+
 
 @dataclass
 class UserPattern:
@@ -104,6 +198,33 @@ class UserPattern:
     frequency: int = 0
     context: Dict[str, Any] = field(default_factory=dict)
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize UserPattern to a JSON-compatible dictionary."""
+        return {
+            "id": self.id,
+            "pattern_type": self.pattern_type,
+            "description": self.description,
+            "confidence": self.confidence,
+            "first_seen": _datetime_to_iso(self.first_seen),
+            "last_seen": _datetime_to_iso(self.last_seen),
+            "frequency": self.frequency,
+            "context": dict(self.context),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "UserPattern":
+        """Deserialize UserPattern from a dictionary."""
+        return cls(
+            id=data.get("id", str(uuid.uuid4())[:8]),
+            pattern_type=data.get("pattern_type", ""),
+            description=data.get("description", ""),
+            confidence=float(data.get("confidence", 0.0)),
+            first_seen=_iso_to_datetime(data.get("first_seen")) or datetime.now(),
+            last_seen=_iso_to_datetime(data.get("last_seen")) or datetime.now(),
+            frequency=int(data.get("frequency", 0)),
+            context=dict(data.get("context", {})),
+        )
+
 
 @dataclass
 class SocialInsight:
@@ -117,6 +238,33 @@ class SocialInsight:
     created_at: datetime = field(default_factory=datetime.now)
     actionable: bool = False
     suggested_action: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize SocialInsight to a JSON-compatible dictionary."""
+        return {
+            "id": self.id,
+            "platform": self.platform,
+            "insight_type": self.insight_type,
+            "content": self.content,
+            "confidence": self.confidence,
+            "created_at": _datetime_to_iso(self.created_at),
+            "actionable": self.actionable,
+            "suggested_action": self.suggested_action,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SocialInsight":
+        """Deserialize SocialInsight from a dictionary."""
+        return cls(
+            id=data.get("id", str(uuid.uuid4())[:8]),
+            platform=data.get("platform", ""),
+            insight_type=data.get("insight_type", ""),
+            content=data.get("content", ""),
+            confidence=float(data.get("confidence", 0.0)),
+            created_at=_iso_to_datetime(data.get("created_at")) or datetime.now(),
+            actionable=bool(data.get("actionable", False)),
+            suggested_action=data.get("suggested_action"),
+        )
 
 
 class LifeTracker:
@@ -503,19 +651,19 @@ class LifeTracker:
             with open(self.storage_path, "r") as f:
                 data = json.load(f)
 
-            # Load events
+            # Load events using from_dict for proper deserialization
             for e_data in data.get("events", []):
-                event = LifeEvent(**e_data)
+                event = LifeEvent.from_dict(e_data)
                 self._events[event.id] = event
 
-            # Load patterns
+            # Load patterns using from_dict
             for p_data in data.get("patterns", []):
-                pattern = UserPattern(**p_data)
+                pattern = UserPattern.from_dict(p_data)
                 self._patterns[pattern.id] = pattern
 
-            # Load insights
+            # Load insights using from_dict
             for i_data in data.get("insights", []):
-                insight = SocialInsight(**i_data)
+                insight = SocialInsight.from_dict(i_data)
                 self._social_insights[insight.id] = insight
 
             logger.info(f"Loaded {len(self._events)} events")
@@ -528,14 +676,15 @@ class LifeTracker:
     async def _save_data(self):
         """Save data to storage"""
         try:
+            # Use to_dict() methods for proper serialization
             data = {
-                "events": [vars(e) for e in self._events.values()],
-                "patterns": [vars(p) for p in self._patterns.values()],
-                "insights": [vars(i) for i in self._social_insights.values()],
+                "events": [e.to_dict() for e in self._events.values()],
+                "patterns": [p.to_dict() for p in self._patterns.values()],
+                "insights": [i.to_dict() for i in self._social_insights.values()],
             }
 
             with open(self.storage_path, "w") as f:
-                json.dump(data, f, default=str)
+                json.dump(data, f, indent=2)
 
         except Exception as e:
             logger.error(f"Error saving data: {e}")

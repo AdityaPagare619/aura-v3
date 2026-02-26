@@ -65,6 +65,7 @@ from src.core.neural_validated_planner import (
     NeuralValidationResult,
     ValidationResult,
     JSONPlan,
+    ToolAction,
     create_neural_planner,
 )
 
@@ -171,6 +172,7 @@ __all__ = [
     "NeuralValidationResult",
     "ValidationResult",
     "JSONPlan",
+    "ToolAction",
     "create_neural_planner",
     # AURA-Native Hebbian Self-Correction
     "HebbianSelfCorrector",
