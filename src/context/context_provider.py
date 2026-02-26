@@ -423,7 +423,9 @@ class ContextProvider:
 
         if self._device_cache:
             ctx.is_busy = (
-                self._device_cache.do_not_disturb or ctx.is_driving or ctx.is_in_meeting
+                self._device_cache.do_not_disturb
+                or ctx.is_driving
+                or getattr(ctx, "is_in_meeting", False)
             )
 
         # Store raw data for LLM
@@ -513,7 +515,9 @@ class ContextProvider:
             # FIXED: Use list args to avoid shell injection
             cmd_list = shlex.split(cmd)
             proc = await asyncio.create_subprocess_exec(
-                *cmd_list, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd_list,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
             if proc.returncode == 0:

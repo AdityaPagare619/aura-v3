@@ -191,7 +191,7 @@ class LocalAuthenticator:
                 json.dump(
                     {
                         "password_hash": base64.b64encode(password_hash).decode(),
-                        "salt": base64.b64decode(salt).decode(),
+                        "salt": base64.b64encode(salt).decode(),
                         "method": "password",
                     },
                     f,

@@ -209,7 +209,7 @@ class SecureStorage:
     """
     Secure encrypted JSON storage for sensitive data.
     Automatically encrypts data before saving and decrypts on load.
-    
+
     Usage:
         storage = SecureStorage('data/healthcare')
         storage.save('profile.json', {'name': 'John', 'age': 30})
@@ -224,15 +224,17 @@ class SecureStorage:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, storage_path: str = 'data/security', encrypt_by_default: bool = True):
-        if hasattr(self, '_initialized') and self._initialized:
+    def __init__(
+        self, storage_path: str = "data/security", encrypt_by_default: bool = True
+    ):
+        if hasattr(self, "_initialized") and self._initialized:
             return
-            
+
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.encrypt_by_default = encrypt_by_default
         self._initialized = True
-        
+
         # Use singleton encryption manager
         if SecureStorage._encryption_manager is None:
             SecureStorage._encryption_manager = EncryptionManager(storage_path)
@@ -250,97 +252,97 @@ class SecureStorage:
         """Save data to file with optional encryption."""
         if encrypt is None:
             encrypt = self.encrypt_by_default
-            
+
         file_path = self.storage_path / filename
-        
+
         try:
             json_data = json.dumps(data, indent=2, default=str)
-            
+
             if encrypt and self._encryption.is_encryption_available():
                 encrypted = self._encryption.encrypt(json_data)
                 if encrypted is None:
-                    logger.error(f'Encryption failed for {filename}')
+                    logger.error(f"Encryption failed for {filename}")
                     return False
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write('ENC:' + encrypted)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write("ENC:" + encrypted)
             else:
-                with open(file_path, 'w', encoding='utf-8') as f:
+                with open(file_path, "w", encoding="utf-8") as f:
                     f.write(json_data)
-                    
-            logger.info(f'Data saved to {filename} (encrypted={encrypt})')
+
+            logger.info(f"Data saved to {filename} (encrypted={encrypt})")
             return True
         except Exception as e:
-            logger.error(f'Failed to save {filename}: {e}')
+            logger.error(f"Failed to save {filename}: {e}")
             return False
 
     def load(self, filename: str, encrypt: bool = None) -> Optional[Dict[str, Any]]:
         """Load data from file with automatic decryption detection."""
         file_path = self.storage_path / filename
-        
+
         if not file_path.exists():
-            logger.warning(f'File not found: {filename}')
+            logger.warning(f"File not found: {filename}")
             return None
-            
+
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            
+
             if encrypt is None:
-                encrypt = content.startswith('ENC:')
-            
-            if encrypt and content.startswith('ENC:'):
+                encrypt = content.startswith("ENC:")
+
+            if encrypt and content.startswith("ENC:"):
                 encrypted_data = content[4:]
                 decrypted = self._encryption.decrypt(encrypted_data)
                 if decrypted is None:
-                    logger.error(f'Decryption failed for {filename}')
+                    logger.error(f"Decryption failed for {filename}")
                     return None
                 return json.loads(decrypted)
             else:
                 return json.loads(content)
-                
+
         except json.JSONDecodeError as e:
-            logger.error(f'Invalid JSON in {filename}: {e}')
+            logger.error(f"Invalid JSON in {filename}: {e}")
             return None
         except Exception as e:
-            logger.error(f'Failed to load {filename}: {e}')
+            logger.error(f"Failed to load {filename}: {e}")
             return None
 
     def save_raw(self, filename: str, content: str, encrypt: bool = True) -> bool:
         """Save raw string content with encryption"""
         file_path = self.storage_path / filename
-        
+
         try:
             if encrypt and self._encryption.is_encryption_available():
                 encrypted = self._encryption.encrypt(content)
                 if encrypted:
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write('ENC:' + encrypted)
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write("ENC:" + encrypted)
                 else:
                     return False
             else:
-                with open(file_path, 'w', encoding='utf-8') as f:
+                with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
             return True
         except Exception as e:
-            logger.error(f'Failed to save raw {filename}: {e}')
+            logger.error(f"Failed to save raw {filename}: {e}")
             return False
 
     def load_raw(self, filename: str) -> Optional[str]:
         """Load raw string content with automatic decryption"""
         file_path = self.storage_path / filename
-        
+
         if not file_path.exists():
             return None
-            
+
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            
-            if content.startswith('ENC:'):
+
+            if content.startswith("ENC:"):
                 return self._encryption.decrypt(content[4:])
             return content
         except Exception as e:
-            logger.error(f'Failed to load raw {filename}: {e}')
+            logger.error(f"Failed to load raw {filename}: {e}")
             return None
 
     def exists(self, filename: str) -> bool:
@@ -356,21 +358,20 @@ class SecureStorage:
                 return True
             return False
         except Exception as e:
-            logger.error(f'Failed to delete {filename}: {e}')
+            logger.error(f"Failed to delete {filename}: {e}")
             return False
 
-    def list_files(self, pattern: str = '*.json') -> List[str]:
+    def list_files(self, pattern: str = "*.json") -> List[str]:
         """List files matching pattern"""
         try:
             return [f.name for f in self.storage_path.glob(pattern)]
         except Exception as e:
-            logger.error(f'Failed to list files: {e}')
+            logger.error(f"Failed to list files: {e}")
             return []
 
     def is_encryption_available(self) -> bool:
         """Check if encryption is available"""
         return self._encryption.is_encryption_available()
-
 
 
 class AuthManager:
@@ -390,7 +391,7 @@ class AuthManager:
         self._pin_hash: Optional[str] = None
         self._salt: Optional[str] = None
         self._auth_method: Optional[str] = None
-        self._is_locked: bool = False
+        self._manually_locked: bool = False
         self._failed_attempts: int = 0
         self._locked_until: Optional[datetime] = None
         self._encryption_key: Optional[bytes] = None
@@ -551,17 +552,17 @@ class AuthManager:
 
     def lock(self):
         """Manually lock AURA"""
-        self._is_locked = True
+        self._manually_locked = True
         logger.info("AURA locked")
 
     def unlock(self):
         """Manually unlock AURA"""
-        self._is_locked = False
+        self._manually_locked = False
         logger.info("AURA unlocked")
 
     def is_manual_lock(self) -> bool:
         """Check if manually locked"""
-        return self._is_locked
+        return self._manually_locked
 
 
 class SessionManager:

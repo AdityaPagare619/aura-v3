@@ -151,12 +151,34 @@ class EncryptedStorage:
                 file_path.unlink()
 
     async def list_keys(self) -> List[str]:
-        """List all stored keys"""
+        """List all stored keys (returns file stems / hashed keys)"""
         keys = []
         async with self._lock:
             for file_path in self.path.glob("*.enc"):
                 keys.append(file_path.stem)
         return keys
+
+    async def load_by_hash(self, hashed_key: str) -> Optional[Dict]:
+        """Load data using a pre-hashed key (file stem) directly"""
+        async with self._lock:
+            file_path = self.path / f"{hashed_key}.enc"
+
+            if not file_path.exists():
+                return None
+
+            try:
+                with open(file_path, "rb") as f:
+                    encrypted = f.read()
+
+                if self._fernet:
+                    decrypted = self._fernet.decrypt(encrypted)
+                else:
+                    decrypted = b64decode(encrypted)
+
+                return json.loads(decrypted.decode())
+            except Exception as e:
+                logger.error(f"Failed to load session by hash {hashed_key}: {e}")
+                return None
 
     async def clear_all(self):
         """Clear all stored data"""
@@ -193,10 +215,18 @@ class SessionManager:
         """Initialize session manager"""
         # Ensure storage directory exists
         Path(self.storage_path).mkdir(parents=True, exist_ok=True)
-        # Load persisted sessions
-        persisted = await self._storage.list_keys()
-        for session_id in persisted[:10]:  # Load last 10
-            await self.load_session(session_id)
+        # Load persisted sessions using pre-hashed keys (file stems)
+        # list_keys() returns SHA256 hashes, so we load by hash directly
+        # to avoid double-hashing
+        persisted_hashes = await self._storage.list_keys()
+        for hashed_key in persisted_hashes[:10]:  # Load last 10
+            data = await self._storage.load_by_hash(hashed_key)
+            if data:
+                try:
+                    session = Session.from_dict(data)
+                    self._sessions[session.id] = session
+                except Exception as e:
+                    logger.warning(f"Failed to restore session from {hashed_key}: {e}")
 
     async def save_all(self):
         """Save all active sessions"""

@@ -60,8 +60,11 @@ def main():
 ╚═══════════════════════════════════════════════════════════╝
     """)
 
-    # Telegram token
-    TELEGRAM_TOKEN = "8504361506:AAGMlzkRS3GN0m_kbINviqHlu8Pb4X0DkeY"
+    # Telegram token - must be set by user via environment variable
+    TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+    if not TELEGRAM_TOKEN:
+        print("\n⚠️  TELEGRAM_TOKEN not set. Telegram integration will be disabled.")
+        print("    Set it later via: export TELEGRAM_TOKEN='your-bot-token'")
 
     # Step 1: Fix existing aura-v3 directory
     print("\n[1/9] Checking existing installation...")
@@ -243,7 +246,7 @@ def main():
     run_script = """#!/bin/bash
 # AURA v3 - Run in background
 cd ~/aura-v3
-export TELEGRAM_TOKEN="8504361506:AAGMlzkRS3GN0m_kbINviqHlu8Pb4X0DkeY"
+export TELEGRAM_TOKEN="${TELEGRAM_TOKEN:-}"
 
 # Check if already running
 if pgrep -f "python.*main.py" > /dev/null; then

@@ -509,9 +509,11 @@ def main():
 
         # Step 7: Configure Telegram
         logger.info("[7/8] Configuring Telegram...")
-        TELEGRAM_TOKEN = os.environ.get(
-            "TELEGRAM_TOKEN", "8504361506:AAGMlzkRS3GN0m_kbINviqHlu8Pb4X0DkeY"
-        )
+        TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+        if not TELEGRAM_TOKEN:
+            logger.warning(
+                "TELEGRAM_TOKEN not set - Telegram integration will be disabled. Set it via: export TELEGRAM_TOKEN='your-token'"
+            )
         configure_telegram(TELEGRAM_TOKEN)
 
         # Step 8: Test imports

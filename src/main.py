@@ -554,6 +554,15 @@ class AuraProduction:
         )
         await self._proactive_event_tracker.initialize()
 
+        # Ensure termux bridge is available (created in Phase 6, needed here)
+        if self._termux_bridge is None:
+            try:
+                from src.addons.termux_bridge import TermuxBridge
+
+                self._termux_bridge = TermuxBridge()
+            except Exception as e:
+                logger.warning(f"Early termux bridge init failed: {e}")
+
         # Intelligent call manager - context-aware call handling
         self._intelligent_call_manager = IntelligentCallManager(
             neural_memory=self._neural_memory,

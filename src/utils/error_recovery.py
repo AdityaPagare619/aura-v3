@@ -216,7 +216,7 @@ class ErrorRecovery:
                         except Exception as e:
                             logger.warning(f"Recovery action failed: {e}")
 
-            backoff = self._calculate_backoff(attemptions)
+            backoff = self._calculate_backoff(attempts)
             logger.info(
                 f"Retrying after {backoff:.2f}s (attempt {attempts}/{self.max_retries})"
             )

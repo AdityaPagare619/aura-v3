@@ -117,10 +117,62 @@ class ReActAgent:
         self._meta_cognition_enabled = True
         self._uncertainty_threshold = 0.5
 
+        # Neural sub-systems (wired later via set_neural_systems)
+        self._neural_planner = None
+        self._hebbian = None
+        self._neural_router = None
+        self._tool_orchestrator = None
+
+    def register_tool(
+        self,
+        name: str,
+        handler: Callable,
+        description: str = "",
+        parameters: Optional[Dict] = None,
+    ):
+        """Register a tool handler with the agent's tool registry"""
+        try:
+            self.tools.register(
+                name=name,
+                handler=handler,
+                description=description,
+                parameters=parameters or {},
+            )
+        except Exception as e:
+            # Fallback: store directly if registry doesn't support register()
+            logger.warning(f"Could not register tool '{name}' via registry: {e}")
+            if not hasattr(self, "_extra_tools"):
+                self._extra_tools = {}
+            self._extra_tools[name] = {
+                "handler": handler,
+                "description": description,
+                "parameters": parameters or {},
+            }
+
+    def set_neural_systems(
+        self,
+        planner=None,
+        hebbian=None,
+        router=None,
+    ):
+        """Wire neural sub-systems (planner, hebbian correction, router) to the agent"""
+        self._neural_planner = planner
+        self._hebbian = hebbian
+        self._neural_router = router
+        logger.info("Neural systems connected to agent loop")
+
+    def set_tool_orchestrator(self, orchestrator):
+        """Set the tool orchestrator for multi-step tool execution"""
+        self._tool_orchestrator = orchestrator
+        logger.info("Tool orchestrator connected to agent loop")
+
     async def process(
         self,
         user_message: str,
         session_history: Optional[List[Dict]] = None,
+        context: Optional[str] = None,
+        user_profile: Optional[Dict] = None,
+        personality: Optional[Any] = None,
     ) -> AgentResponse:
         """
         Main entry point: Process user message through ReAct loop
@@ -128,6 +180,9 @@ class ReActAgent:
         Args:
             user_message: The user's input
             session_history: Previous conversation turns
+            context: Pre-computed context string (time, location, activity)
+            user_profile: User profile data for personalization
+            personality: Personality state for response tone
 
         Returns:
             AgentResponse with message, thoughts, and actions
@@ -772,6 +827,76 @@ Respond with analysis and concrete suggestions if any.
         return AgentResponse(
             message="I'm not sure what action was pending.", state=self.state
         )
+
+
+# ==============================================================================
+# SINGLETON FACTORY
+# ==============================================================================
+
+_agent_instance: Optional[ReActAgent] = None
+
+
+def get_agent(**kwargs) -> ReActAgent:
+    """
+    Get or create the singleton ReActAgent instance.
+
+    Called by main.py during _init_brain(). Creates a lightweight ReActAgent
+    with stub dependencies — the real LLM, memory, tools etc. are wired in
+    later by main.py via register_tool(), set_neural_systems(), etc.
+
+    This allows main.py to control the initialization order while still
+    having a valid agent object to reference immediately.
+    """
+    global _agent_instance
+    if _agent_instance is not None:
+        return _agent_instance
+
+    # Create with lightweight stubs — main.py will wire real components
+    # We use try/except because these imports may fail on first boot,
+    # but the agent can still be created with minimal deps.
+    try:
+        from src.llm import get_llm_manager
+
+        llm = get_llm_manager()
+    except Exception:
+        llm = None
+
+    try:
+        tool_registry = ToolRegistry()
+    except Exception:
+        tool_registry = None
+
+    try:
+        memory = HierarchicalMemory()
+    except Exception:
+        memory = None
+
+    try:
+        context_detector = ContextDetector()
+    except Exception:
+        context_detector = None
+
+    try:
+        learning_engine = LearningEngine()
+    except Exception:
+        learning_engine = None
+
+    try:
+        security_layer = SecurityLayer()
+    except Exception:
+        security_layer = None
+
+    _agent_instance = ReActAgent(
+        llm=llm,
+        tool_registry=tool_registry,
+        memory=memory,
+        context_detector=context_detector,
+        learning_engine=learning_engine,
+        security_layer=security_layer,
+        max_iterations=kwargs.get("max_iterations", 10),
+    )
+
+    return _agent_instance
 
 
 class AgentFactory:

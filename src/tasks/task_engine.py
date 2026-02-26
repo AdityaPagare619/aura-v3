@@ -14,6 +14,8 @@ Example:
 - "Read email THEN reply" → Task1 → Task2 → SEQUENTIAL
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
