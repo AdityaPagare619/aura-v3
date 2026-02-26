@@ -1,5 +1,17 @@
 #!/bin/bash
-# AURA v3 Termux Setup Script
+# =============================================================================
+# DEPRECATED: Use scripts/install.sh instead
+# =============================================================================
+# This script is deprecated as of Wave 5.2.
+# Please use the unified installer:
+#
+#     bash scripts/install.sh
+#
+# The unified installer auto-detects Termux and handles everything.
+# This file is kept for backwards compatibility only.
+# =============================================================================
+
+# AURA v3 Termux Setup Script (LEGACY)
 # Run on Android with Termux
 
 echo "🤖 Setting up AURA v3..."

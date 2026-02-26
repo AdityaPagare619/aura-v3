@@ -7,6 +7,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -42,7 +43,7 @@ class TestAuraEmotion(unittest.TestCase):
             AuraEmotion.GRATEFUL,
             AuraEmotion.CONFUSED,
         ]
-        self.assertGreaterEqual(len(emotions), 10)
+        assert len(emotions) >= 10
 
 
 class TestUnderstandingDomain(unittest.TestCase):
@@ -60,7 +61,7 @@ class TestUnderstandingDomain(unittest.TestCase):
             UnderstandingDomain.PRODUCTIVITY,
             UnderstandingDomain.ENERGY_LEVELS,
         ]
-        self.assertEqual(len(domains), 8)
+        assert len(domains) == 8
 
 
 class TestTrustPhase(unittest.TestCase):
@@ -75,7 +76,7 @@ class TestTrustPhase(unittest.TestCase):
             TrustPhase.COMFORTABLE,
             TrustPhase.PARTNERSHIP,
         ]
-        self.assertEqual(len(phases), 5)
+        assert len(phases) == 5
 
 
 class TestUnderstandingMetric(unittest.TestCase):
@@ -89,25 +90,25 @@ class TestUnderstandingMetric(unittest.TestCase):
             evidence=["Observation 1"],
             observations=["Observed work pattern"],
         )
-        self.assertEqual(metric.score, 7.5)
-        self.assertEqual(metric.domain, UnderstandingDomain.WORK_STYLE)
+        assert metric.score == 7.5
+        assert metric.domain == UnderstandingDomain.WORK_STYLE
 
     def test_adjust_score(self):
         """Test adjusting score"""
         metric = UnderstandingMetric(domain=UnderstandingDomain.WORK_STYLE, score=5.0)
 
         metric.adjust_score(2.0)
-        self.assertEqual(metric.score, 7.0)
+        assert metric.score == 7.0
 
         metric.adjust_score(-3.0)
-        self.assertEqual(metric.score, 4.0)
+        assert metric.score == 4.0
 
         # Bounds
         metric.adjust_score(20.0)
-        self.assertEqual(metric.score, 10.0)
+        assert metric.score == 10.0
 
         metric.adjust_score(-20.0)
-        self.assertEqual(metric.score, 0.0)
+        assert metric.score == 0.0
 
 
 class TestTrustState(unittest.TestCase):
@@ -116,18 +117,18 @@ class TestTrustState(unittest.TestCase):
     def test_default_state(self):
         """Test default trust state"""
         state = TrustState()
-        self.assertEqual(state.phase, TrustPhase.INTRODUCTION)
-        self.assertEqual(
-            len(state.metrics), 0
+        assert state.phase == TrustPhase.INTRODUCTION
+        assert (
+            len(state.metrics) == 0
         )  # Raw TrustState has no metrics; FeelingsMeter adds them
-        self.assertEqual(state.total_interactions, 0)
+        assert state.total_interactions == 0
 
     def test_get_overall_score(self):
         """Test overall score calculation"""
         state = TrustState()
 
         # Empty metrics
-        self.assertEqual(state.get_overall_score(), 0.0)
+        assert state.get_overall_score() == 0.0
 
         # Add some metrics
         state.metrics[UnderstandingDomain.WORK_STYLE.value] = UnderstandingMetric(
@@ -138,7 +139,7 @@ class TestTrustState(unittest.TestCase):
         )
 
         overall = state.get_overall_score()
-        self.assertGreater(overall, 0.0)
+        assert overall > 0.0
 
     def test_get_phase_description(self):
         """Test phase description"""
@@ -149,17 +150,17 @@ class TestTrustState(unittest.TestCase):
             domain=UnderstandingDomain.WORK_STYLE, score=1.0
         )
         desc = state.get_phase_description()
-        self.assertIn("getting started", desc)
+        assert "getting started" in desc
 
         # High score - use 9.5 to ensure above threshold
         for domain in UnderstandingDomain:
             state.metrics[domain.value] = UnderstandingMetric(domain=domain, score=9.5)
         desc = state.get_phase_description()
-        self.assertIn("deeply", desc)
+        assert "deeply" in desc
 
 
-class TestFeelingsMeter(unittest.TestCase):
-    """Test FeelingsMeter class"""
+class TestFeelingsMeterSync(unittest.TestCase):
+    """Test FeelingsMeter class - synchronous tests"""
 
     def setUp(self):
         """Set up test with temp storage"""
@@ -176,77 +177,88 @@ class TestFeelingsMeter(unittest.TestCase):
 
     def test_default_state(self):
         """Test default state"""
-        self.assertEqual(self.meter.feeling_state.primary, AuraEmotion.CALM)
-        self.assertEqual(self.meter.feeling_state.secondary, AuraEmotion.CURIOUS)
-        self.assertEqual(len(self.meter.trust_state.metrics), 8)
+        assert self.meter.feeling_state.primary == AuraEmotion.CALM
+        assert self.meter.feeling_state.secondary == AuraEmotion.CURIOUS
+        assert len(self.meter.trust_state.metrics) == 8
 
-    @asyncio.coroutine
-    def test_initialize(self):
+
+# Async tests for FeelingsMeter using pytest-native fixtures
+@pytest.fixture
+def feelings_meter():
+    """Create a FeelingsMeter with temp storage"""
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+    temp_file.close()
+    meter = FeelingsMeter(storage_path=temp_file.name)
+    yield meter
+    try:
+        os.unlink(temp_file.name)
+    except:
+        pass
+
+
+class TestFeelingsMeterAsync:
+    """Test FeelingsMeter class - async tests"""
+
+    async def test_initialize(self, feelings_meter):
         """Test initialization"""
-        yield from self.meter.initialize()
-        self.assertIsNotNone(self.meter.store)
+        await feelings_meter.initialize()
+        assert feelings_meter.store is not None
 
-    @asyncio.coroutine
-    def test_update_feeling(self):
+    async def test_update_feeling(self, feelings_meter):
         """Test updating feeling"""
-        state = yield from self.meter.update_feeling(
+        state = await feelings_meter.update_feeling(
             emotion=AuraEmotion.HAPPY,
             intensity=0.8,
             cause="User completed a task",
             evidence=["Task completed successfully"],
         )
 
-        self.assertEqual(state.primary, AuraEmotion.HAPPY)
-        self.assertEqual(state.intensity, 0.8)
-        self.assertEqual(state.cause, "User completed a task")
+        assert state.primary == AuraEmotion.HAPPY
+        assert state.intensity == 0.8
+        assert state.cause == "User completed a task"
 
-    @asyncio.coroutine
-    def test_format_feeling_message(self):
+    async def test_format_feeling_message(self, feelings_meter):
         """Test formatting feeling message"""
-        yield from self.meter.update_feeling(
+        await feelings_meter.update_feeling(
             emotion=AuraEmotion.CONFIDENT, intensity=0.7, cause="Good interaction"
         )
 
-        message = self.meter.format_feeling_message()
-        self.assertIn("confident", message)
+        message = feelings_meter.format_feeling_message()
+        assert "confident" in message
 
-    @asyncio.coroutine
-    def test_update_understanding(self):
+    async def test_update_understanding(self, feelings_meter):
         """Test updating understanding"""
-        metric = yield from self.meter.update_understanding(
+        metric = await feelings_meter.update_understanding(
             domain=UnderstandingDomain.WORK_STYLE,
             observation="User works late often",
             evidence="Logged 5 late nights this week",
             confidence=0.7,
         )
 
-        self.assertGreater(metric.score, 0.0)
+        assert metric.score > 0.0
 
-    @asyncio.coroutine
-    def test_record_interaction_success(self):
+    async def test_record_interaction_success(self, feelings_meter):
         """Test recording successful interaction"""
-        yield from self.meter.record_interaction(
+        await feelings_meter.record_interaction(
             domain=UnderstandingDomain.WORK_STYLE, success=True
         )
 
-        self.assertEqual(self.meter.trust_state.total_interactions, 1)
-        self.assertEqual(self.meter.trust_state.successful_interactions, 1)
+        assert feelings_meter.trust_state.total_interactions == 1
+        assert feelings_meter.trust_state.successful_interactions == 1
 
-    @asyncio.coroutine
-    def test_record_interaction_failure(self):
+    async def test_record_interaction_failure(self, feelings_meter):
         """Test recording failed interaction"""
-        yield from self.meter.record_interaction(
+        await feelings_meter.record_interaction(
             domain=UnderstandingDomain.WORK_STYLE, success=False
         )
 
-        self.assertEqual(self.meter.trust_state.total_interactions, 1)
-        self.assertEqual(self.meter.trust_state.failed_interactions, 1)
+        assert feelings_meter.trust_state.total_interactions == 1
+        assert feelings_meter.trust_state.failed_interactions == 1
 
-    @asyncio.coroutine
-    def test_correct_understanding(self):
+    async def test_correct_understanding(self, feelings_meter):
         """Test correcting understanding"""
         # First update some understanding
-        yield from self.meter.update_understanding(
+        await feelings_meter.update_understanding(
             domain=UnderstandingDomain.SLEEP_PATTERNS,
             observation="User sleeps late",
             evidence="Late activity",
@@ -254,127 +266,123 @@ class TestFeelingsMeter(unittest.TestCase):
         )
 
         # Then correct it
-        record = yield from self.meter.correct_understanding(
+        record = await feelings_meter.correct_understanding(
             domain=UnderstandingDomain.SLEEP_PATTERNS,
             correction="No, you're wrong about my sleep",
             explanation="I actually sleep early",
         )
 
-        self.assertIsNotNone(record)
-        self.assertEqual(record.domain, "sleep_patterns")
+        assert record is not None
+        assert record.domain == "sleep_patterns"
 
-    @asyncio.coroutine
-    def test_confirm_understanding(self):
+    async def test_confirm_understanding(self, feelings_meter):
         """Test confirming understanding"""
-        yield from self.meter.confirm_understanding(domain=UnderstandingDomain.GOALS)
+        await feelings_meter.confirm_understanding(domain=UnderstandingDomain.GOALS)
 
-        metric = self.meter.trust_state.metrics[UnderstandingDomain.GOALS.value]
-        self.assertGreater(metric.score, 0.0)
-        self.assertEqual(metric.confirmations, 1)
+        metric = feelings_meter.trust_state.metrics[UnderstandingDomain.GOALS.value]
+        assert metric.score > 0.0
+        assert metric.confirmations == 1
 
-    @asyncio.coroutine
-    def test_get_understanding_meter(self):
+    async def test_get_understanding_meter(self, feelings_meter):
         """Test getting understanding meter"""
-        yield from self.meter.update_understanding(
+        await feelings_meter.update_understanding(
             domain=UnderstandingDomain.WORK_STYLE,
             observation="Test",
             evidence="Test",
             confidence=0.5,
         )
 
-        meter_data = self.meter.get_understanding_meter(UnderstandingDomain.WORK_STYLE)
+        meter_data = feelings_meter.get_understanding_meter(
+            UnderstandingDomain.WORK_STYLE
+        )
 
-        self.assertIn("score", meter_data)
-        self.assertIn("domain", meter_data)
+        assert "score" in meter_data
+        assert "domain" in meter_data
 
-    @asyncio.coroutine
-    def test_format_trust_message(self):
+    async def test_format_trust_message(self, feelings_meter):
         """Test formatting trust message"""
         # Add some understanding
-        yield from self.meter.update_understanding(
+        await feelings_meter.update_understanding(
             domain=UnderstandingDomain.WORK_STYLE,
             observation="Test",
             evidence="Test",
             confidence=0.8,
         )
 
-        message = self.meter.format_trust_message()
-        self.assertIn("understand", message.lower())
+        message = feelings_meter.format_trust_message()
+        assert "understand" in message.lower()
 
-    @asyncio.coroutine
-    def test_generate_sleep_feeling(self):
+    async def test_generate_sleep_feeling(self, feelings_meter):
         """Test generating sleep-related feeling"""
-        state = yield from self.meter.generate_contextual_feeling(
+        state = await feelings_meter.generate_contextual_feeling(
             context="sleep", observations=["late night", "tired"]
         )
 
         # Should generate concerned or uncertain feeling
-        self.assertIn(
-            state.primary,
-            [AuraEmotion.CONCERNED, AuraEmotion.UNCERTAIN, AuraEmotion.TIRED],
-        )
+        assert state.primary in [
+            AuraEmotion.CONCERNED,
+            AuraEmotion.UNCERTAIN,
+            AuraEmotion.TIRED,
+        ]
 
-    @asyncio.coroutine
-    def test_generate_work_feeling(self):
+    async def test_generate_work_feeling(self, feelings_meter):
         """Test generating work-related feeling"""
-        state = yield from self.meter.generate_contextual_feeling(
+        state = await feelings_meter.generate_contextual_feeling(
             context="work", observations=["deadline approaching", "busy"]
         )
 
         # Should be focused
-        self.assertEqual(state.primary, AuraEmotion.FOCUSED)
+        assert state.primary == AuraEmotion.FOCUSED
 
-    @asyncio.coroutine
-    def test_get_trends(self):
+    async def test_get_trends(self, feelings_meter):
         """Test getting trends"""
         # Add some feelings
         for _ in range(3):
-            yield from self.meter.update_feeling(
+            await feelings_meter.update_feeling(
                 emotion=AuraEmotion.HAPPY, intensity=0.7, cause="Test"
             )
 
-        trends = self.meter.get_trends(days=7)
+        trends = feelings_meter.get_trends(days=7)
 
-        self.assertIn("feeling_count", trends)
-        self.assertIn("dominant_emotion", trends)
+        assert "feeling_count" in trends
+        assert "dominant_emotion" in trends
 
-    @asyncio.coroutine
-    def test_get_statistics(self):
+    async def test_get_statistics(self, feelings_meter):
         """Test getting statistics"""
-        yield from self.meter.update_understanding(
+        await feelings_meter.update_understanding(
             domain=UnderstandingDomain.WORK_STYLE,
             observation="Test",
             evidence="Test",
             confidence=0.5,
         )
 
-        stats = self.meter.get_statistics()
+        stats = feelings_meter.get_statistics()
 
-        self.assertIn("total_interactions", stats)
-        self.assertIn("trust_overall", stats)
-        self.assertIn("current_feeling", stats)
+        assert "total_interactions" in stats
+        assert "trust_overall" in stats
+        assert "current_feeling" in stats
 
-    @asyncio.coroutine
-    def test_feeling_state_transitions(self):
+    async def test_feeling_state_transitions(self, feelings_meter):
         """Test feeling changes after interactions"""
         # Success
-        yield from self.meter.record_interaction(
+        await feelings_meter.record_interaction(
             domain=UnderstandingDomain.WORK_STYLE, success=True
         )
 
         # Should be confident now
-        self.assertIn(
-            self.meter.feeling_state.primary, [AuraEmotion.CONFIDENT, AuraEmotion.HAPPY]
-        )
+        assert feelings_meter.feeling_state.primary in [
+            AuraEmotion.CONFIDENT,
+            AuraEmotion.HAPPY,
+        ]
 
         # Multiple failures
         for _ in range(5):
-            yield from self.meter.record_interaction(
+            await feelings_meter.record_interaction(
                 domain=UnderstandingDomain.WORK_STYLE, success=False
             )
 
         # Should be uncertain
-        self.assertEqual(self.meter.feeling_state.primary, AuraEmotion.UNCERTAIN)
+        assert feelings_meter.feeling_state.primary == AuraEmotion.UNCERTAIN
 
 
 class TestFeelingsMeterIntegration(unittest.TestCase):
@@ -406,7 +414,7 @@ class TestFeelingsMeterIntegration(unittest.TestCase):
         meter2 = loop.run_until_complete(get_feelings_meter())
 
         # Should be same instance
-        self.assertIs(meter1, meter2)
+        assert meter1 is meter2
 
         loop.close()
 

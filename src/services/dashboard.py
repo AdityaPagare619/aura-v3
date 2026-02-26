@@ -370,19 +370,65 @@ class DashboardService:
         # Get recent activities
         recent = await self.get_activities(limit=10)
 
+        # Get resource metrics from resource monitor
+        system_health = await self._get_system_health()
+
         return DashboardState(
             last_updated=now,
             active_agents=active_agents,
             active_tasks=active_tasks,
             pending_actions=0,  # Would come from proactive engine
             recent_activities=recent,
-            system_health={"memory": "good", "cpu": "normal", "battery": "unknown"},
+            system_health=system_health,
             user_profile_summary={
                 "events_tracked": 0,
                 "insights_generated": 0,
                 "patterns_learned": 0,
             },
         )
+
+    async def _get_system_health(self) -> Dict[str, Any]:
+        """Get system health from resource monitor"""
+        try:
+            from src.utils.resource_monitor import get_resource_monitor
+
+            monitor = get_resource_monitor()
+            metrics = monitor.get_current_metrics()
+
+            if metrics.get("status") == "no_data":
+                return {"memory": "unknown", "cpu": "unknown", "battery": "unknown"}
+
+            ram = metrics.get("ram", {})
+            cpu = metrics.get("cpu", {})
+
+            # Determine status strings
+            ram_pct = ram.get("percent", 0)
+            cpu_pct = cpu.get("percent", 0)
+
+            ram_status = (
+                "critical" if ram_pct >= 90 else "warning" if ram_pct >= 75 else "good"
+            )
+            cpu_status = (
+                "critical"
+                if cpu_pct >= 85
+                else "warning"
+                if cpu_pct >= 70
+                else "normal"
+            )
+
+            return {
+                "memory": ram_status,
+                "memory_percent": ram_pct,
+                "memory_used_mb": ram.get("used_mb", 0),
+                "cpu": cpu_status,
+                "cpu_percent": cpu_pct,
+                "battery": "unknown",
+                "databases": metrics.get("databases", []),
+                "tasks": metrics.get("tasks", {}),
+            }
+
+        except ImportError:
+            return {"memory": "good", "cpu": "normal", "battery": "unknown"}
 
     # =========================================================================
     # REAL-TIME SUBSCRIPTIONS
@@ -425,8 +471,35 @@ class DashboardService:
             f"║ Active Agents: {state.active_agents}                                          ║",
             f"║ Active Tasks: {state.active_tasks}                                           ║",
             "╠═══════════════════════════════════════════════════════════════╣",
-            "║ RECENT ACTIVITY:                                            ║",
+            "║ SYSTEM RESOURCES:                                            ║",
         ]
+
+        # Add resource info
+        health = state.system_health
+        mem_pct = health.get("memory_percent", 0)
+        cpu_pct = health.get("cpu_percent", 0)
+        mem_status = health.get("memory", "unknown")
+        cpu_status = health.get("cpu", "unknown")
+
+        lines.extend(
+            [
+                f"║ • Memory: {mem_pct:5.1f}% ({mem_status:<8})                           ║",
+                f"║ • CPU:    {cpu_pct:5.1f}% ({cpu_status:<8})                           ║",
+            ]
+        )
+
+        # Database info
+        dbs = health.get("databases", [])
+        if dbs:
+            total_db_size = sum(db.get("size_mb", 0) for db in dbs)
+            lines.append(
+                f"║ • Databases: {len(dbs)} files, {total_db_size:.1f} MB total                  ║"
+            )
+
+        lines.append(
+            "╠═══════════════════════════════════════════════════════════════╣"
+        )
+        lines.append("║ RECENT ACTIVITY:                                            ║")
 
         for activity in state.recent_activities[:5]:
             icon = {

@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: Use scripts/install.sh for installation
+====================================================
+This interactive setup wizard is deprecated for installation.
+Please use the unified installer:
+
+    bash scripts/install.sh
+
+This script can still be used for:
+  - Interactive configuration: python scripts/setup.py
+  - Status check: python scripts/setup.py --status
+  - Testing: python scripts/setup.py --test
+
+For installation, use install.sh instead.
+====================================================
+
 AURA v3 Interactive Setup Script
 
 Guides users through:

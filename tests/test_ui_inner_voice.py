@@ -7,6 +7,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -92,8 +93,9 @@ class TestThoughtTone(unittest.TestCase):
         self.assertEqual(len(tones), 7)
 
 
-class TestInnerVoiceStream(unittest.TestCase):
-    """Test InnerVoiceStream class"""
+# Synchronous tests for InnerVoiceStream (using unittest.TestCase)
+class TestInnerVoiceStreamSync(unittest.TestCase):
+    """Synchronous tests for InnerVoiceStream class"""
 
     def setUp(self):
         """Set up test with temp storage"""
@@ -113,16 +115,35 @@ class TestInnerVoiceStream(unittest.TestCase):
         self.assertEqual(len(self.stream.thoughts), 0)
         self.assertTrue(self.stream.settings.is_visible)
 
-    @asyncio.coroutine
-    def test_initialize(self):
-        """Test initialization"""
-        yield from self.stream.initialize()
-        self.assertIsNotNone(self.stream.store)
 
-    @asyncio.coroutine
-    def test_generate_thought(self):
+# Pytest fixture for async tests
+@pytest.fixture
+def inner_voice_stream():
+    """Create InnerVoiceStream instance for async tests"""
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+    temp_file.close()
+    stream = InnerVoiceStream(storage_path=temp_file.name)
+    yield stream
+    try:
+        os.unlink(temp_file.name)
+    except:
+        pass
+
+
+# Async tests using pytest-native class (NOT unittest.TestCase)
+class TestInnerVoiceStreamAsync:
+    """Async tests for InnerVoiceStream - pytest-native class"""
+
+    @pytest.mark.asyncio
+    async def test_initialize(self, inner_voice_stream):
+        """Test initialization"""
+        await inner_voice_stream.initialize()
+        assert inner_voice_stream.store is not None
+
+    @pytest.mark.asyncio
+    async def test_generate_thought(self, inner_voice_stream):
         """Test generating a thought"""
-        thought = yield from self.stream.generate_thought(
+        thought = await inner_voice_stream.generate_thought(
             content="User seems happy today",
             category=ThoughtCategory.OBSERVATION,
             reasoning_steps=["User's tone was positive", "They laughed"],
@@ -130,102 +151,102 @@ class TestInnerVoiceStream(unittest.TestCase):
             confidence=0.8,
             tone=ThoughtTone.CURIOUS,
         )
-        self.assertIsNotNone(thought)
-        self.assertEqual(thought.content, "User seems happy today")
-        self.assertEqual(thought.category, ThoughtCategory.OBSERVATION)
+        assert thought is not None
+        assert thought.content == "User seems happy today"
+        assert thought.category == ThoughtCategory.OBSERVATION
 
-    @asyncio.coroutine
-    def test_explain_action(self):
+    @pytest.mark.asyncio
+    async def test_explain_action(self, inner_voice_stream):
         """Test action explanation"""
-        explanation = yield from self.stream.explain_action(
+        explanation = await inner_voice_stream.explain_action(
             action="set_reminder",
-            human_reasoning="you always forget this kind of thing",
+            human_reasoning="because you always forget this kind of thing",
             reasoning_steps=[
                 "User mentioned deadline",
                 "Past pattern shows forgetfulness",
             ],
             evidence=["User said 'don't forget'"],
         )
-        self.assertIsNotNone(explanation)
-        self.assertEqual(explanation.action, "set_reminder")
-        self.assertIn("because", explanation.human_reasoning)
+        assert explanation is not None
+        assert explanation.action == "set_reminder"
+        assert "because" in explanation.human_reasoning
 
-    @asyncio.coroutine
-    def test_get_visible_thoughts(self):
+    @pytest.mark.asyncio
+    async def test_get_visible_thoughts(self, inner_voice_stream):
         """Test getting visible thoughts"""
         # Add some thoughts
         for i in range(5):
-            yield from self.stream.generate_thought(
+            await inner_voice_stream.generate_thought(
                 content=f"Thought {i}",
                 category=ThoughtCategory.REASONING,
                 reasoning_steps=["Test"],
                 evidence=["Test"],
             )
 
-        thoughts = self.stream.get_visible_thoughts(count=3)
-        self.assertEqual(len(thoughts), 3)
+        thoughts = inner_voice_stream.get_visible_thoughts(count=3)
+        assert len(thoughts) == 3
 
-    @asyncio.coroutine
-    def test_correct_thought(self):
+    @pytest.mark.asyncio
+    async def test_correct_thought(self, inner_voice_stream):
         """Test correcting a thought"""
-        thought = yield from self.stream.generate_thought(
+        thought = await inner_voice_stream.generate_thought(
             content="Test thought",
             category=ThoughtCategory.OBSERVATION,
             reasoning_steps=["Test"],
             evidence=["Test"],
         )
 
-        corrected = yield from self.stream.correct_thought(
+        corrected = await inner_voice_stream.correct_thought(
             thought_id=thought.id, correction="You're wrong about this"
         )
 
-        self.assertIsNotNone(corrected)
-        self.assertTrue(corrected.user_corrected)
-        self.assertEqual(corrected.correction_count, 1)
+        assert corrected is not None
+        assert corrected.user_corrected is True
+        assert corrected.correction_count == 1
 
-    @asyncio.coroutine
-    def test_confirm_thought(self):
+    @pytest.mark.asyncio
+    async def test_confirm_thought(self, inner_voice_stream):
         """Test confirming a thought"""
-        thought = yield from self.stream.generate_thought(
+        thought = await inner_voice_stream.generate_thought(
             content="Test thought",
             category=ThoughtCategory.OBSERVATION,
             reasoning_steps=["Test"],
             evidence=["Test"],
         )
 
-        confirmed = yield from self.stream.confirm_thought(thought.id)
+        confirmed = await inner_voice_stream.confirm_thought(thought.id)
 
-        self.assertIsNotNone(confirmed)
-        self.assertEqual(confirmed.confirmation_count, 1)
+        assert confirmed is not None
+        assert confirmed.confirmation_count == 1
 
-    @asyncio.coroutine
-    def test_update_settings(self):
+    @pytest.mark.asyncio
+    async def test_update_settings(self, inner_voice_stream):
         """Test updating settings"""
-        settings = yield from self.stream.update_settings(
+        settings = await inner_voice_stream.update_settings(
             always_show_why=True, max_visible_thoughts=10
         )
 
-        self.assertTrue(settings.always_show_why)
-        self.assertEqual(settings.max_visible_thoughts, 10)
+        assert settings.always_show_why is True
+        assert settings.max_visible_thoughts == 10
 
-    @asyncio.coroutine
-    def test_context_thought_generation(self):
+    @pytest.mark.asyncio
+    async def test_context_thought_generation(self, inner_voice_stream):
         """Test context-aware thought generation"""
-        thought = yield from self.stream.generate_context_thought(
+        thought = await inner_voice_stream.generate_context_thought(
             context_type="reminder",
             observations=["you mentioned this before"],
             user_patterns={"forget_rate": 0.7},
         )
 
-        self.assertIsNotNone(thought)
-        self.assertIn("reminder", thought.related_action or "")
+        assert thought is not None
+        assert "reminder" in (thought.related_action or "")
 
-    @asyncio.coroutine
-    def test_get_thought_snippets(self):
+    @pytest.mark.asyncio
+    async def test_get_thought_snippets(self, inner_voice_stream):
         """Test getting formatted snippets"""
         # Add thoughts
         for i in range(3):
-            yield from self.stream.generate_thought(
+            await inner_voice_stream.generate_thought(
                 content=f"Thought {i}",
                 category=ThoughtCategory.OBSERVATION,
                 reasoning_steps=["Step 1"],
@@ -233,45 +254,45 @@ class TestInnerVoiceStream(unittest.TestCase):
                 confidence=0.6,
             )
 
-        snippets = self.stream.get_thought_snippets(count=2)
+        snippets = inner_voice_stream.get_thought_snippets(count=2)
 
-        self.assertEqual(len(snippets), 2)
-        self.assertIn("content", snippets[0])
-        self.assertIn("category", snippets[0])
+        assert len(snippets) == 2
+        assert "content" in snippets[0]
+        assert "category" in snippets[0]
 
-    @asyncio.coroutine
-    def test_statistics(self):
+    @pytest.mark.asyncio
+    async def test_statistics(self, inner_voice_stream):
         """Test getting statistics"""
         # Add some thoughts
         for i in range(3):
-            yield from self.stream.generate_thought(
+            await inner_voice_stream.generate_thought(
                 content=f"Thought {i}",
                 category=ThoughtCategory.REASONING,
                 reasoning_steps=["Test"],
                 evidence=["Test"],
             )
 
-        stats = self.stream.get_statistics()
+        stats = inner_voice_stream.get_statistics()
 
-        self.assertEqual(stats["total_thoughts"], 3)
-        self.assertIn("settings", stats)
+        assert stats["total_thoughts"] == 3
+        assert "settings" in stats
 
-    @asyncio.coroutine
-    def test_hidden_mode(self):
+    @pytest.mark.asyncio
+    async def test_hidden_mode(self, inner_voice_stream):
         """Test hidden mode returns no thoughts"""
-        yield from self.stream.update_settings(is_visible=False)
+        await inner_voice_stream.update_settings(is_visible=False)
 
         # Add thoughts
         for i in range(3):
-            yield from self.stream.generate_thought(
+            await inner_voice_stream.generate_thought(
                 content=f"Thought {i}",
                 category=ThoughtCategory.REASONING,
                 reasoning_steps=["Test"],
                 evidence=["Test"],
             )
 
-        thoughts = self.stream.get_visible_thoughts()
-        self.assertEqual(len(thoughts), 0)
+        thoughts = inner_voice_stream.get_visible_thoughts()
+        assert len(thoughts) == 0
 
 
 class TestInnerVoiceIntegration(unittest.TestCase):

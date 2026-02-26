@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """
-AURA v3 - Auto Setup Script
+DEPRECATED: Use scripts/install.sh instead
+===============================================
+This script is deprecated as of Wave 5.2.
+Please use the unified installer:
+
+    bash scripts/install.sh
+
+The unified installer handles:
+  - All environments (Termux, Desktop, Docker)
+  - Python version checking
+  - Proper dependency management
+  - Configuration setup
+
+This file is kept for backwards compatibility only.
+===============================================
+
+AURA v3 - Auto Setup Script (LEGACY)
 Run this on Termux to install everything automatically
 
 Usage:

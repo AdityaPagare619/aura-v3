@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """
-AURA v3 - Production-Grade Setup Script
+DEPRECATED: Use scripts/install.sh instead
+===============================================
+This script is deprecated as of Wave 5.2.
+Please use the unified installer:
+
+    bash scripts/install.sh
+
+The unified installer provides all the same features:
+  - Environment detection
+  - Validation and health checks
+  - Model setup guidance
+  - Production-grade logging
+
+This file is kept for backwards compatibility only.
+===============================================
+
+AURA v3 - Production-Grade Setup Script (LEGACY)
 Based on OpenClaw production practices
 
 Features:

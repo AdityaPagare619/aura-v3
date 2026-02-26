@@ -364,3 +364,70 @@ class HealthMonitor:
             "cpu_percent": psutil.cpu_percent(interval=0.1),
             "uptime_seconds": time.time() - self._start_time,
         }
+
+    def get_detailed_metrics(self) -> Dict[str, Any]:
+        """Get detailed metrics including resource monitor data if available"""
+        try:
+            from src.utils.resource_monitor import get_resource_monitor
+
+            resource_monitor = get_resource_monitor()
+            return resource_monitor.get_summary()
+        except ImportError:
+            # Fallback if resource monitor not available
+            return {
+                "current": {
+                    "ram": {
+                        "percent": psutil.virtual_memory().percent,
+                        "used_mb": psutil.virtual_memory().used / (1024 * 1024),
+                    },
+                    "cpu": {
+                        "percent": psutil.cpu_percent(interval=0.1),
+                    },
+                },
+                "peaks": {},
+                "llm": {},
+            }
+
+
+# ==============================================================================
+# INTEGRATION WITH RESOURCE MONITOR
+# ==============================================================================
+
+
+def get_health_and_resources() -> Dict[str, Any]:
+    """Get combined health and resource information"""
+    try:
+        from src.utils.resource_monitor import get_resource_monitor
+
+        # Get resource monitor data
+        resource_monitor = get_resource_monitor()
+        resource_summary = resource_monitor.get_summary()
+
+        # Get current metrics
+        current = resource_summary.get("current", {})
+        ram = current.get("ram", {})
+        cpu = current.get("cpu", {})
+
+        # Determine health status
+        ram_percent = ram.get("percent", 0)
+        cpu_percent = cpu.get("percent", 0)
+
+        if ram_percent >= 90 or cpu_percent >= 85:
+            status = "critical"
+        elif ram_percent >= 75 or cpu_percent >= 70:
+            status = "degraded"
+        else:
+            status = "healthy"
+
+        return {
+            "status": status,
+            "resources": resource_summary,
+            "alerts": [],
+        }
+
+    except ImportError:
+        return {
+            "status": "unknown",
+            "resources": {},
+            "alerts": ["Resource monitor not available"],
+        }

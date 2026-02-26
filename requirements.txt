@@ -1,21 +1,42 @@
+# =============================================================================
 # AURA v3 Dependencies
-# Core (required)
-aiofiles>=23.0.0
-pyyaml>=6.0
-cryptography>=41.0.0
+# =============================================================================
+# Single source of truth for all dependencies
+# Python 3.8+ required
+#
+# Install: pip install -r requirements.txt
+# =============================================================================
 
-# LLM (optional - for advanced users)
-# Install manually if needed:
-# pip install llama-cpp-python
-# Or use pre-built wheels from:
-# https://github.com/abetlen/llama-cpp-python/releases
+# -----------------------------------------------------------------------------
+# Core (Required)
+# -----------------------------------------------------------------------------
+aiofiles>=23.0.0          # Async file operations
+pyyaml>=6.0               # Configuration parsing
+cryptography>=41.0.0      # Encryption for secure storage
 
-# Telegram Bot
+# -----------------------------------------------------------------------------
+# Telegram Bot (Required for Telegram mode)
+# -----------------------------------------------------------------------------
 python-telegram-bot>=20.0
 
-# Voice (optional)
-# pyttsx3>=2.90
-
+# -----------------------------------------------------------------------------
 # Testing
+# -----------------------------------------------------------------------------
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
+
+# -----------------------------------------------------------------------------
+# Voice (Optional)
+# Uncomment if you want voice support
+# -----------------------------------------------------------------------------
+# pyttsx3>=2.90            # Cross-platform TTS
+
+# -----------------------------------------------------------------------------
+# LLM (Optional - Advanced)
+# Not installed by default due to build complexity
+# Install manually if needed:
+#   pip install llama-cpp-python
+#   OR use pre-built: pip install llama-cpp-python --only-binary :all:
+#   OR use Ollama backend (no Python package needed)
+# -----------------------------------------------------------------------------
+# llama-cpp-python>=0.2.0
