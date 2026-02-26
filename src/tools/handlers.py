@@ -2,11 +2,17 @@
 AURA v3 Tool Handlers
 Implements actual execution for tools registered in the registry
 Uses TermuxBridge for Android operations
+
+This module is the CANONICAL tool execution layer for AURA v3.
+It includes:
+- TermuxBridge integration for secure command execution
+- App exploration memory (explore once, remember forever)
+- Security validation on all inputs
 """
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -32,22 +38,35 @@ except ImportError:
     validate_command = lambda x, y=None: True
     validate_integer = lambda x, y=None, z=None: int(x)
 
+# Import app exploration memory for "explore once, remember forever" feature
+try:
+    from src.tools.android import AppExplorationMemory
+except ImportError:
+    AppExplorationMemory = None
+
 
 class ToolHandlers:
     """
-    Tool execution handlers
-    Connects tool definitions to actual implementations
+    Tool execution handlers - CANONICAL tool execution for AURA v3.
+
+    Connects tool definitions to actual implementations.
+    Includes:
+    - TermuxBridge for secure Android command execution
+    - AppExplorationMemory for "explore once, remember forever"
+    - Security validation on all inputs
     """
 
     def __init__(self):
         self.termux_bridge = None
+        self.exploration_memory = None
         self._initialized = False
 
     async def initialize(self):
-        """Initialize tool handlers with Termux bridge"""
+        """Initialize tool handlers with Termux bridge and exploration memory"""
         if self._initialized:
             return
 
+        # Initialize Termux bridge
         try:
             from src.addons.termux_bridge import TermuxBridge
 
@@ -57,6 +76,14 @@ class ToolHandlers:
         except Exception as e:
             logger.warning(f"Termux bridge not available: {e}")
             # Continue without Termux - tools will return appropriate errors
+
+        # Initialize exploration memory (explore once, remember forever)
+        if AppExplorationMemory is not None:
+            try:
+                self.exploration_memory = AppExplorationMemory()
+                logger.info("App exploration memory initialized")
+            except Exception as e:
+                logger.warning(f"Exploration memory not available: {e}")
 
         self._initialized = True
 
@@ -441,6 +468,176 @@ class ToolHandlers:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    # =========================================================================
+    # App Exploration Memory Tools (explore once, remember forever)
+    # =========================================================================
+
+    async def explore_current_app(self) -> Dict[str, Any]:
+        """
+        Explore current app's UI and cache its structure.
+        This enables AURA's 'explore once, remember forever' capability.
+        """
+        logger.info("Exploring current app")
+
+        if not self.termux_bridge:
+            return {"success": False, "error": "Termux bridge not available"}
+
+        if not self.exploration_memory:
+            return {"success": False, "error": "Exploration memory not available"}
+
+        try:
+            # Get current app info
+            app_result = await self.get_current_app()
+            if not app_result.get("success"):
+                return {"success": False, "error": "Could not get current app"}
+
+            app_name = app_result.get("app", "unknown")
+
+            # Take screenshot for visual reference
+            screenshot_result = await self.take_screenshot()
+
+            # Get screen size
+            size_result = await self.termux_bridge.run_command(["wm", "size"])
+            screen_size = {"width": 1080, "height": 2400}  # defaults
+            if size_result.success and size_result.stdout:
+                try:
+                    size_str = size_result.stdout.split(":")[-1].strip()
+                    width, height = map(int, size_str.split("x"))
+                    screen_size = {"width": width, "height": height}
+                except:
+                    pass
+
+            # Build structure
+            structure = {
+                "package": app_name,
+                "screen_size": screen_size,
+                "elements": {},  # Would be populated by UI dump
+                "last_explored": datetime.now().isoformat(),
+            }
+
+            # Save to memory
+            self.exploration_memory.save_app_structure(app_name, structure)
+
+            return {
+                "success": True,
+                "app": app_name,
+                "structure": structure,
+                "message": f"Explored and cached structure for {app_name}",
+            }
+        except Exception as e:
+            logger.error(f"Error exploring app: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_cached_apps(self) -> Dict[str, Any]:
+        """Get list of apps with cached UI structures"""
+        if not self.exploration_memory:
+            return {
+                "success": False,
+                "error": "Exploration memory not available",
+                "apps": [],
+            }
+
+        try:
+            apps = self.exploration_memory.list_cached_apps()
+            return {"success": True, "apps": apps, "count": len(apps)}
+        except Exception as e:
+            return {"success": False, "error": str(e), "apps": []}
+
+    async def get_app_structure(self, app_name: str) -> Dict[str, Any]:
+        """Get cached UI structure for an app"""
+        if not self.exploration_memory:
+            return {"success": False, "error": "Exploration memory not available"}
+
+        try:
+            validated_name = validate_app_name(app_name)
+            structure = self.exploration_memory.get_app_structure(validated_name)
+
+            if structure:
+                return {"success": True, "app": validated_name, "structure": structure}
+            return {"success": False, "error": f"No cached structure for {app_name}"}
+        except SecurityError as e:
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def save_element_position(
+        self, app_name: str, element_desc: str, x: int, y: int
+    ) -> Dict[str, Any]:
+        """Save a UI element position for future use"""
+        if not self.exploration_memory:
+            return {"success": False, "error": "Exploration memory not available"}
+
+        try:
+            validated_name = validate_app_name(app_name)
+            validated_desc = sanitize_string(element_desc, max_length=100)
+            validated_x = validate_integer(x, min_val=0, max_val=4096)
+            validated_y = validate_integer(y, min_val=0, max_val=4096)
+
+            self.exploration_memory.save_element_position(
+                validated_name, validated_desc, (validated_x, validated_y)
+            )
+
+            return {
+                "success": True,
+                "message": f"Saved element '{element_desc}' at ({x}, {y}) for {app_name}",
+            }
+        except SecurityError as e:
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def tap_cached_element(
+        self, app_name: str, element_desc: str
+    ) -> Dict[str, Any]:
+        """Tap a previously cached UI element position"""
+        if not self.exploration_memory:
+            return {"success": False, "error": "Exploration memory not available"}
+
+        if not self.termux_bridge:
+            return {"success": False, "error": "Termux bridge not available"}
+
+        try:
+            validated_name = validate_app_name(app_name)
+            validated_desc = sanitize_string(element_desc, max_length=100)
+
+            coords = self.exploration_memory.get_element_position(
+                validated_name, validated_desc
+            )
+            if not coords:
+                return {
+                    "success": False,
+                    "error": f"Element '{element_desc}' not found in cache for {app_name}",
+                }
+
+            x, y = coords
+            result = await self.termux_bridge.run_command(
+                ["input", "tap", str(x), str(y)]
+            )
+
+            return {
+                "success": result.success,
+                "message": f"Tapped element '{element_desc}' at ({x}, {y})",
+                "coords": {"x": x, "y": y},
+            }
+        except SecurityError as e:
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def clear_app_memory(self, app_name: str) -> Dict[str, Any]:
+        """Clear cached structure for an app"""
+        if not self.exploration_memory:
+            return {"success": False, "error": "Exploration memory not available"}
+
+        try:
+            validated_name = validate_app_name(app_name)
+            self.exploration_memory.delete_app_structure(validated_name)
+            return {"success": True, "message": f"Cleared cache for {app_name}"}
+        except SecurityError as e:
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
 
 # Global instance
 _tool_handlers: Optional[ToolHandlers] = None
@@ -469,4 +666,11 @@ def create_handler_dict(handlers: ToolHandlers) -> Dict[str, Any]:
         "write_file": handlers.write_file,
         "get_system_info": handlers.get_system_info,
         "run_shell_command": handlers.run_shell_command,
+        # Exploration memory tools
+        "explore_current_app": handlers.explore_current_app,
+        "get_cached_apps": handlers.get_cached_apps,
+        "get_app_structure": handlers.get_app_structure,
+        "save_element_position": handlers.save_element_position,
+        "tap_cached_element": handlers.tap_cached_element,
+        "clear_app_memory": handlers.clear_app_memory,
     }

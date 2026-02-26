@@ -1,8 +1,28 @@
+"""
+AURA Android Tools - App Exploration Memory
+
+NOTE: This module provides AppExplorationMemory which is now integrated into
+ToolHandlers (handlers.py). The AndroidTools and AndroidShell classes here
+are DEPRECATED - use ToolHandlers instead for actual tool execution.
+
+The AppExplorationMemory class is still the canonical implementation for
+AURA's "explore once, remember forever" feature and is imported by handlers.py.
+
+DEPRECATED classes (use ToolHandlers instead):
+- AndroidShell: Use TermuxBridge via ToolHandlers
+- AndroidTools: Use ToolHandlers methods directly
+
+ACTIVE classes (still used):
+- AppExplorationMemory: SQLite-backed memory for app UI structures
+- AppStructure: Data class for cached app structure
+"""
+
 import asyncio
 import json
 import logging
 import subprocess
 import shlex
+import warnings
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
@@ -150,9 +170,19 @@ class AppExplorationMemory:
 
 
 class AndroidShell:
-    """Execute ADB commands on Android/Termux"""
+    """
+    Execute ADB commands on Android/Termux
+
+    DEPRECATED: Use ToolHandlers with TermuxBridge instead.
+    This class is maintained for backward compatibility only.
+    """
 
     def __init__(self, adb_path: str = "adb"):
+        warnings.warn(
+            "AndroidShell is deprecated. Use ToolHandlers with TermuxBridge instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.adb_path = adb_path
 
     async def run(self, command: str, timeout: int = 10) -> str:
@@ -234,9 +264,17 @@ class AndroidTools:
     """
     Android actions with exploration memory.
     Key innovation: explores app once, remembers forever.
+
+    DEPRECATED: Use ToolHandlers instead which integrates this functionality
+    with TermuxBridge for secure command execution and proper security validation.
     """
 
     def __init__(self, exploration_memory: AppExplorationMemory = None):
+        warnings.warn(
+            "AndroidTools is deprecated. Use ToolHandlers from src.tools.handlers instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.memory = exploration_memory or AppExplorationMemory()
         self.shell = AndroidShell()
         self.screen_size = {"width": 1080, "height": 2400}

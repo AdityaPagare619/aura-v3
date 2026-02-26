@@ -506,6 +506,31 @@ class ToolRegistry:
         self.tools[tool.name] = tool
         logger.info(f"Registered tool: {tool.name} ({tool.category})")
 
+    def bind_handlers(self, handler_object: Any):
+        """
+        Bind handler methods from a handler object to registered tools.
+
+        This connects tool definitions to actual implementations.
+        Handler methods should match tool names (with underscores, e.g., 'send_message').
+
+        Args:
+            handler_object: Object with methods matching tool names (e.g., ToolHandlers instance)
+        """
+        bound_count = 0
+        for tool_name, tool_def in self.tools.items():
+            # Convert tool_name to method name (already snake_case)
+            method_name = tool_name
+            handler = getattr(handler_object, method_name, None)
+
+            if handler is not None and callable(handler):
+                tool_def.handler = handler
+                bound_count += 1
+                logger.debug(f"Bound handler for tool: {tool_name}")
+            else:
+                logger.debug(f"No handler found for tool: {tool_name}")
+
+        logger.info(f"Bound {bound_count}/{len(self.tools)} tool handlers")
+
     def get_tool(self, name: str) -> Optional[Callable]:
         """Get tool handler by name"""
         tool = self.tools.get(name)
