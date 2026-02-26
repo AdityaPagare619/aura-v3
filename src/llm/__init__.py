@@ -1,3 +1,12 @@
+"""
+LLM Module - Unified LLM interface for AURA v3
+
+This module provides a unified interface to various LLM backends.
+The canonical implementation is ProductionLLM (production_llm.py).
+
+LLMRunner and LLMConfig are preserved for backward compatibility.
+"""
+
 import os
 import asyncio
 import logging
@@ -9,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LLMConfig:
+    """Configuration for LLM - preserved for backward compatibility"""
+
     model_path: str = None
     model_type: str = "llama"
     quantization: str = "q5_k_m"
@@ -19,13 +30,25 @@ class LLMConfig:
 
 
 class LLMRunner:
-    """Persistent LLM - stays loaded in memory between requests"""
+    """
+    Persistent LLM - stays loaded in memory between requests.
+
+    This is a backward-compatible wrapper around ProductionLLM.
+    Interface preserved: generate(messages) -> {"content": str, "usage": dict, "model": str}
+    """
 
     def __init__(self, config: LLMConfig = None):
         self.config = config or LLMConfig()
-        self.model = None
-        self.loaded = False
+        self._production_llm = None
         self._lock = asyncio.Lock()
+        self.loaded = False
+
+    async def _ensure_production_llm(self):
+        """Lazy-load ProductionLLM"""
+        if self._production_llm is None:
+            from .production_llm import ProductionLLM
+
+            self._production_llm = ProductionLLM()
 
     async def load_model(self):
         """Load model ONCE at startup - CRITICAL for mobile performance"""
@@ -33,43 +56,29 @@ class LLMRunner:
             if self.loaded:
                 return
 
-            # Try to import llama_cpp
-            try:
-                from llama_cpp import Llama
+            await self._ensure_production_llm()
 
-                # Check if model exists
-                if not self.config.model_path or not os.path.exists(
-                    self.config.model_path
-                ):
-                    logger.warning(
-                        f"Model not found: {self.config.model_path}, using mock"
+            # If config has a model path, try to load it
+            if self.config.model_path and os.path.exists(self.config.model_path):
+                try:
+                    # Register model with ProductionLLM
+                    from .production_llm import BackendType
+
+                    success = await self._production_llm.load_model(
+                        model_id=self.config.model_type,
+                        model_path=self.config.model_path,
                     )
-                    self.model = None
-                    self.loaded = True
-                    return
 
-                # Load model with mobile-optimized settings
-                self.model = Llama(
-                    model_path=self.config.model_path,
-                    n_ctx=self.config.max_context,
-                    n_gpu_layers=self.config.n_gpu_layers,  # 0 for CPU
-                    n_threads=4,  # Mobile CPU optimization
-                    n_threads_batch=4,
-                    verbose=False,
-                    use_mmap=True,  # Memory mapping for mobile
-                    use_mlock=False,  # Don't lock in memory on mobile
-                )
-                self.loaded = True
-                logger.info("LLM model loaded successfully")
+                    if success:
+                        self.loaded = True
+                        logger.info("LLM model loaded via ProductionLLM")
+                        return
+                except Exception as e:
+                    logger.error(f"Failed to load model via ProductionLLM: {e}")
 
-            except ImportError:
-                logger.warning("llama-cpp-python not installed, using mock")
-                self.model = None
-                self.loaded = True
-            except Exception as e:
-                logger.error(f"Failed to load model: {e}")
-                self.model = None
-                self.loaded = True
+            # Fallback: mark as loaded but with no model (mock mode)
+            logger.warning(f"Model not found: {self.config.model_path}, using mock")
+            self.loaded = True
 
     async def generate(
         self, messages: List[Dict], max_tokens: int = None, temperature: float = None
@@ -79,33 +88,32 @@ class LLMRunner:
         if not self.loaded:
             await self.load_model()
 
-        if self.model is None:
-            # Use mock
-            return await self._mock_generate(messages)
+        await self._ensure_production_llm()
 
-        # Convert messages to prompt format
-        prompt = self._messages_to_prompt(messages)
+        # Check if ProductionLLM has a model loaded
+        if self._production_llm.is_loaded:
+            # Convert messages to prompt
+            prompt = self._messages_to_prompt(messages)
 
-        try:
-            # Run in executor to not block
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.model(
-                    prompt,
+            try:
+                result = await self._production_llm.generate(
+                    prompt=prompt,
                     max_tokens=max_tokens or self.config.max_tokens,
-                    temperature=temperature or self.config.temperature,
-                    stop=["</s>", "<|end|>"],
-                ),
-            )
+                )
 
-            return {
-                "content": result["choices"][0]["text"],
-                "usage": result.get("usage", {}),
-                "model": self.config.model_type,
-            }
-        except Exception as e:
-            logger.error(f"Generation error: {e}")
+                return {
+                    "content": result.get("text", ""),
+                    "usage": {
+                        "tokens_generated": result.get("tokens_generated", 0),
+                        "latency_ms": result.get("latency_ms", 0),
+                    },
+                    "model": result.get("model", self.config.model_type),
+                }
+            except Exception as e:
+                logger.error(f"Generation error: {e}")
+                return await self._mock_generate(messages)
+        else:
+            # Use mock
             return await self._mock_generate(messages)
 
     async def generate_with_tools(
@@ -184,34 +192,30 @@ class LLMRunner:
 
     def get_memory_usage(self) -> Dict:
         """Return current memory stats"""
-        if self.model is None:
-            return {"loaded": False, "memory_mb": 0}
+        if self._production_llm and self._production_llm.is_loaded:
+            return {
+                "loaded": True,
+                "model_path": self.config.model_path,
+                "context_size": self.config.max_context,
+                "quantization": self.config.quantization,
+            }
 
-        return {
-            "loaded": True,
-            "model_path": self.config.model_path,
-            "context_size": self.config.max_context,
-            "quantization": self.config.quantization,
-        }
+        return {"loaded": False, "memory_mb": 0}
 
     def is_loaded(self) -> bool:
         return self.loaded
 
     async def unload_model(self):
         """Unload model from memory"""
-        self.model = None
+        if self._production_llm:
+            await self._production_llm.unload_model()
         self.loaded = False
         logger.info("Model unloaded")
 
     def unload(self):
         """Sync wrapper for unload_model"""
-        # For sync context, just set loaded to False
         self.loaded = False
         logger.info("Model unload requested")
-
-
-# Export for easy use
-__all__ = ["LLMRunner", "LLMConfig", "MockLLM"]
 
 
 class MockLLM(LLMRunner):
@@ -238,3 +242,15 @@ class MockLLM(LLMRunner):
     def unload(self):
         """Sync wrapper for unload"""
         self.loaded = False
+
+
+# Re-export get_llm_manager from manager.py for backward compatibility
+def get_llm_manager():
+    """Get the global LLM manager instance"""
+    from .manager import get_llm_manager as _get_llm_manager
+
+    return _get_llm_manager()
+
+
+# Export for easy use
+__all__ = ["LLMRunner", "LLMConfig", "MockLLM", "get_llm_manager"]

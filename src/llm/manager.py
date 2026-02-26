@@ -17,14 +17,30 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Import real LLM integration
+# Import ProductionLLM (canonical LLM backend)
 try:
-    from src.llm.real_llm import RealLLMIntegration, LLMConfig, BackendType
+    from src.llm.production_llm import ProductionLLM, BackendType
 
-    REAL_LLM_AVAILABLE = True
+    PRODUCTION_LLM_AVAILABLE = True
 except ImportError:
-    REAL_LLM_AVAILABLE = False
-    logger.warning("Real LLM integration not available, using fallback mode")
+    PRODUCTION_LLM_AVAILABLE = False
+    logger.warning("ProductionLLM not available, using fallback mode")
+
+# Legacy import for backward compatibility (deprecated)
+try:
+    from src.llm.real_llm import LLMConfig
+except ImportError:
+    from dataclasses import dataclass
+
+    @dataclass
+    class LLMConfig:
+        model_path: str = ""
+        backend: str = "llama_cpp"
+        n_ctx: int = 2048
+        n_gpu_layers: int = 0
+        n_threads: int = 4
+        temperature: float = 0.7
+        max_tokens: int = 512
 
 
 class ModelType(Enum):
@@ -110,10 +126,10 @@ class LLMManager:
         # Loaded models
         self._loaded_models: Dict[str, ModelInfo] = {}
 
-        # Real LLM integration
-        self._real_llm: Optional[RealLLMIntegration] = None
-        if REAL_LLM_AVAILABLE:
-            self._real_llm = RealLLMIntegration()
+        # Production LLM integration (canonical backend)
+        self._production_llm: Optional[ProductionLLM] = None
+        if PRODUCTION_LLM_AVAILABLE:
+            self._production_llm = ProductionLLM()
 
         # Settings
         self._default_stt_model = "base"
@@ -351,41 +367,26 @@ class LLMManager:
     # =========================================================================
 
     async def _load_llm(self, model_name: str):
-        """Load LLM model using real_llm integration"""
+        """Load LLM model using ProductionLLM integration"""
         logger.info(f"Loading LLM model: {model_name}")
 
-        if not REAL_LLM_AVAILABLE or self._real_llm is None:
-            logger.warning("Real LLM not available, using fallback")
+        if not PRODUCTION_LLM_AVAILABLE or self._production_llm is None:
+            logger.warning("ProductionLLM not available, using fallback")
             await asyncio.sleep(0.1)
             return
 
-        # Determine backend from model name
-        if "llama" in model_name.lower():
-            backend = BackendType.LLAMA_CPP
-        elif "gpt4all" in model_name.lower():
-            backend = BackendType.GPT4ALL
-        elif "ollama" in model_name.lower():
-            backend = BackendType.OLLAMA
-        else:
-            backend = BackendType.LLAMA_CPP  # Default to llama.cpp
+        # Determine model path
+        model_path = str(self.models_dir / model_name)
 
-        # Create config
-        config = LLMConfig(
-            model_path=str(self.models_dir / model_name),
-            backend=backend,
-            n_ctx=2048,
-            n_gpu_layers=0,  # Mobile: CPU only by default
-            n_threads=4,
-            temperature=self._temperature,
-            max_tokens=self._max_tokens,
+        # Load the model via ProductionLLM
+        success = await self._production_llm.load_model(
+            model_id=model_name,
+            model_path=model_path,
         )
-
-        # Load the model
-        success = await self._real_llm.load(config)
         if success:
-            logger.info(f"Real LLM loaded successfully with {backend.value}")
+            logger.info(f"ProductionLLM loaded successfully: {model_name}")
         else:
-            logger.warning("Failed to load real LLM, using fallback")
+            logger.warning("Failed to load ProductionLLM, using fallback")
 
     async def generate(
         self,
@@ -416,27 +417,27 @@ class LLMManager:
             )
 
         try:
-            # Try using real LLM first
+            # Try using ProductionLLM first
             if (
-                REAL_LLM_AVAILABLE
-                and self._real_llm is not None
-                and self._real_llm.is_loaded
+                PRODUCTION_LLM_AVAILABLE
+                and self._production_llm is not None
+                and self._production_llm.is_loaded
             ):
-                response_text = await self._real_llm.generate(
+                result = await self._production_llm.generate(
                     prompt=prompt,
                     max_tokens=max_tokens or self._max_tokens,
-                    temperature=temperature or self._temperature,
-                    stop=stop,
                 )
 
                 return LLMResponse(
-                    text=response_text,
-                    model=llm_models[0].name,
-                    tokens_used=len(response_text.split()),
-                    inference_time_ms=1000,
+                    text=result.get("text", ""),
+                    model=result.get("model", llm_models[0].name),
+                    tokens_used=result.get(
+                        "tokens_generated", len(result.get("text", "").split())
+                    ),
+                    inference_time_ms=int(result.get("latency_ms", 1000)),
                 )
 
-            # Fallback to mock response if real LLM not available
+            # Fallback to mock response if ProductionLLM not available
             response_text = f"[LLM response would appear here for: {prompt[:50]}...]"
 
             return LLMResponse(

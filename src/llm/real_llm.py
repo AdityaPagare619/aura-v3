@@ -1,9 +1,22 @@
 """
 AURA v3 Real LLM Integration
-Actually works with local models (llama.cpp, gpt4all, etc.)
 
-This replaces the placeholder mock LLM manager with REAL implementation.
+DEPRECATED: This module is deprecated as of Wave 3 Task 3.1 (LLM Unification).
+Use ProductionLLM from src.llm.production_llm instead.
+
+The functionality has been absorbed into ProductionLLM, which now supports
+all backends: LLAMA_CPP, GPT4ALL, OLLAMA, and TRANSFORMERS.
+
+This file is kept for backward compatibility but will be removed in a future version.
 """
+
+import warnings
+
+warnings.warn(
+    "real_llm.py is deprecated. Use ProductionLLM from src.llm.production_llm instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import asyncio
 import logging

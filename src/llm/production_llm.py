@@ -1232,6 +1232,8 @@ class ProductionLLM:
                 return await self._load_gpt4all(model)
             elif model.backend == BackendType.OLLAMA:
                 return await self._load_ollama(model)
+            elif model.backend == BackendType.TRANSFORMERS:
+                return await self._load_transformers(model)
             else:
                 logger.error(f"Unsupported backend: {model.backend}")
                 return False
@@ -1317,6 +1319,41 @@ class ProductionLLM:
             logger.error(f"Failed to connect to Ollama: {e}")
             return False
 
+    async def _load_transformers(self, model: ModelSpec) -> bool:
+        """Load using HuggingFace transformers"""
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            import torch
+
+            logger.info(f"Loading transformers model: {model.model_path}")
+
+            # Check available memory and set device
+            if torch.cuda.is_available():
+                device_map = "auto"
+                torch_dtype = torch.float16
+            else:
+                device_map = "cpu"
+                torch_dtype = torch.float32
+                logger.info("CUDA not available, using CPU")
+
+            self._transformers_model = AutoModelForCausalLM.from_pretrained(
+                model.model_path,
+                torch_dtype=torch_dtype,
+                device_map=device_map,
+                low_cpu_mem_usage=True,  # Mobile-first: reduce memory
+            )
+            self._transformers_tokenizer = AutoTokenizer.from_pretrained(
+                model.model_path
+            )
+
+            self.backend = "transformers"
+            logger.info(f"Transformers model loaded: {model.name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to load transformers model: {e}")
+            return False
+
     async def generate(
         self,
         prompt: str,
@@ -1375,6 +1412,8 @@ class ProductionLLM:
                     full_text = result.get("choices", [{}])[0].get("text", "").strip()
                 elif self.current_model.backend == BackendType.OLLAMA:
                     full_text = await self._generate_ollama(prompt, max_tokens)
+                elif self.current_model.backend == BackendType.TRANSFORMERS:
+                    full_text = await self._generate_transformers(prompt, max_tokens)
                 else:
                     full_text = "[Error: Unsupported backend for generation]"
 
@@ -1432,6 +1471,41 @@ class ProductionLLM:
             if response.ok:
                 return response.json().get("response", "").strip()
             return f"[Error: {response.status_code}]"
+
+        except Exception as e:
+            return f"[Error: {str(e)}]"
+
+    async def _generate_transformers(self, prompt: str, max_tokens: int) -> str:
+        """Generate using HuggingFace transformers"""
+        import torch
+
+        try:
+
+            def _run():
+                inputs = self._transformers_tokenizer(prompt, return_tensors="pt").to(
+                    self._transformers_model.device
+                )
+
+                with torch.no_grad():
+                    outputs = self._transformers_model.generate(
+                        **inputs,
+                        max_new_tokens=max_tokens,
+                        temperature=0.7,
+                        do_sample=True,
+                        pad_token_id=self._transformers_tokenizer.eos_token_id,
+                    )
+
+                return self._transformers_tokenizer.decode(
+                    outputs[0], skip_special_tokens=True
+                )
+
+            result = await asyncio.to_thread(_run)
+
+            # Remove prompt from output (transformers includes it)
+            if result.startswith(prompt):
+                result = result[len(prompt) :]
+
+            return result.strip()
 
         except Exception as e:
             return f"[Error: {str(e)}]"
