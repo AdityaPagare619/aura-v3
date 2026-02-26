@@ -9,10 +9,20 @@ import uuid
 from base64 import b64decode, b64encode
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+
+class SessionType(Enum):
+    """Types of AURA sessions."""
+
+    INTERACTION = auto()  # Normal user interaction
+    BACKGROUND = auto()  # Background task execution
+    PROACTIVE = auto()  # Proactive assistance
+    SYSTEM = auto()  # System maintenance
 
 
 try:
@@ -247,10 +257,19 @@ class SessionManager:
 
         return key
 
-    def create_session(self) -> str:
-        """Create new session, return session_id"""
+    def create_session(self, session_type: SessionType = None) -> str:
+        """Create new session, return session_id.
+
+        Args:
+            session_type: Type of session to create. Defaults to INTERACTION.
+
+        Returns:
+            The new session ID.
+        """
         session_id = str(uuid.uuid4())
         session = Session(id=session_id)
+        if session_type:
+            session.metadata["session_type"] = session_type.name
         self._sessions[session_id] = session
         self._active_session = session_id
         return session_id
@@ -383,6 +402,24 @@ class SessionManager:
             raise ValueError(f"Session {session_id} not found")
         self._active_session = session_id
 
+    def end_session(self, session_id: str = None):
+        """End a session (or the active session if no ID provided).
+
+        Args:
+            session_id: Session ID to end. If None, ends the active session.
+        """
+        if session_id is None:
+            session_id = self._active_session
+
+        if session_id is None:
+            return  # No active session to end
+
+        if session_id in self._sessions:
+            self._sessions[session_id].updated_at = datetime.utcnow().isoformat()
+
+        if self._active_session == session_id:
+            self._active_session = None
+
     def get_session_metadata(self, session_id: str, key: str = None) -> Any:
         """Get session metadata"""
         if session_id not in self._sessions:
@@ -485,3 +522,48 @@ class AsyncSessionManager(SessionManager):
     async def import_session_async(self, json_data: str) -> str:
         async with self._lock:
             return self.import_session(json_data)
+
+
+# Singleton instance
+_session_manager: Optional[SessionManager] = None
+
+
+def get_session_manager(
+    storage_path: str = None,
+    encryption_key: bytes = None,
+    encryption: bool = True,
+    max_history: int = 100,
+) -> SessionManager:
+    """Get or create the singleton SessionManager instance.
+
+    Args:
+        storage_path: Path for session storage. Defaults to data/sessions.
+        encryption_key: Optional encryption key. Auto-generated if not provided.
+        encryption: Whether to enable encryption. Default True.
+        max_history: Maximum messages per session. Default 100.
+
+    Returns:
+        The singleton SessionManager instance.
+    """
+    global _session_manager
+
+    if _session_manager is None:
+        if storage_path is None:
+            # Default to data/sessions relative to project root
+            project_root = Path(__file__).parent.parent.parent
+            storage_path = str(project_root / "data" / "sessions")
+
+        _session_manager = SessionManager(
+            storage_path=storage_path,
+            encryption_key=encryption_key,
+            encryption=encryption,
+            max_history=max_history,
+        )
+
+    return _session_manager
+
+
+def reset_session_manager():
+    """Reset the singleton (useful for testing)."""
+    global _session_manager
+    _session_manager = None

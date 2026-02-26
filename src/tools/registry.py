@@ -540,6 +540,30 @@ class ToolRegistry:
         """List all available tool names"""
         return list(self.tools.keys())
 
+    def __len__(self) -> int:
+        """Return number of registered tools"""
+        return len(self.tools)
+
+    def items(self):
+        """Return tool items for iteration (dict-like interface)"""
+        return self.tools.items()
+
+    def keys(self):
+        """Return tool names (dict-like interface)"""
+        return self.tools.keys()
+
+    def values(self):
+        """Return tool definitions (dict-like interface)"""
+        return self.tools.values()
+
+    def __iter__(self):
+        """Iterate over tool names"""
+        return iter(self.tools)
+
+    def __contains__(self, name: str) -> bool:
+        """Check if tool exists"""
+        return name in self.tools
+
     def list_tools_by_category(self, category: str) -> List[str]:
         """List tools in a specific category"""
         return [name for name, tool in self.tools.items() if tool.category == category]

@@ -103,6 +103,15 @@ class AdaptiveContextEngine:
         self.max_patterns = 100
         self.min_confidence_threshold = 0.6
         self.pattern_decay_factor = 0.95
+        self._running = False
+
+    async def start(self):
+        """Start the adaptive context engine."""
+        self._running = True
+
+    async def stop(self):
+        """Stop the adaptive context engine."""
+        self._running = False
 
     # =========================================================================
     # CORE LEARNING - ADAPTIVE, NOT HARDCODED

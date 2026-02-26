@@ -66,11 +66,23 @@ class LearningEngine:
         self.max_history = 1000
 
         self._initialized = False
+        self._running = False
 
     async def initialize(self):
         if not self._initialized:
             await asyncio.get_event_loop().run_in_executor(None, self.load_patterns)
             self._initialized = True
+
+    async def start(self):
+        """Start the learning engine."""
+        await self.initialize()
+        self._running = True
+
+    async def stop(self):
+        """Stop the learning engine and save patterns."""
+        if self._running:
+            await self.save_all()
+            self._running = False
 
     async def get_pattern_count(self) -> int:
         """Get count of learned patterns"""
@@ -691,3 +703,48 @@ class LearningEngine:
                     self.fallback_history = defaultdict(list, json.load(f))
         except Exception as e:
             pass
+
+
+# Singleton instance
+_learning_engine: Optional[LearningEngine] = None
+
+
+def get_learning_engine(
+    memory=None,
+    patterns_path: str = None,
+    min_confidence: float = 0.6,
+    max_patterns: int = 1000,
+) -> LearningEngine:
+    """Get or create the singleton LearningEngine instance.
+
+    Args:
+        memory: Optional memory system reference.
+        patterns_path: Path for pattern storage. Defaults to data/patterns.
+        min_confidence: Minimum confidence threshold for patterns.
+        max_patterns: Maximum number of patterns to store.
+
+    Returns:
+        The singleton LearningEngine instance.
+    """
+    global _learning_engine
+
+    if _learning_engine is None:
+        if patterns_path is None:
+            # Default to data/patterns relative to project root
+            project_root = Path(__file__).parent.parent.parent
+            patterns_path = str(project_root / "data" / "patterns")
+
+        _learning_engine = LearningEngine(
+            memory=memory,
+            patterns_path=patterns_path,
+            min_confidence=min_confidence,
+            max_patterns=max_patterns,
+        )
+
+    return _learning_engine
+
+
+def reset_learning_engine():
+    """Reset the singleton (useful for testing)."""
+    global _learning_engine
+    _learning_engine = None

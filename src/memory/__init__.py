@@ -21,6 +21,19 @@ import hashlib
 
 from src.utils.db_pool import get_connection, connection as db_connection
 
+# Import and re-export from neural_memory
+from src.memory.neural_memory import (
+    NeuralMemory,
+    get_neural_memory,
+    MemoryType as NeuralMemoryType,
+)
+
+# Import and re-export from episodic_memory
+from src.memory.episodic_memory import EpisodicMemory
+
+# Import and re-export from semantic_memory
+from src.memory.semantic_memory import SemanticMemory
+
 logger = logging.getLogger(__name__)
 
 
