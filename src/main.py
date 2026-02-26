@@ -5,10 +5,13 @@ Mobile-optimized, production-ready main module
 
 import asyncio
 import logging
+import os
 import signal
 import sys
-from typing import Optional
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
+from typing import Optional
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -40,6 +43,9 @@ class AuraProduction:
         self._tier1_loaded = False
         self._tier2_loaded = False
         self._tier2_task: Optional[asyncio.Task] = None
+
+        # Check for previous crash
+        self._check_previous_crash()
 
         # Core - THE BRAIN (LLM + Memory + Processing)
         self._agent_loop = None
@@ -128,6 +134,73 @@ class AuraProduction:
             "cinematic_moments_enabled": True,
             "aura_space_port": 8080,
         }
+
+        # Debug server (only when DEBUG_MODE=true)
+        self._debug_server: Optional[DebugServer] = None
+
+    def _get_marker_dir(self) -> Path:
+        """Get marker directory"""
+        return Path.home() / "aura-v3"
+
+    def _check_previous_crash(self) -> bool:
+        """Check if previous run crashed"""
+        marker_dir = self._get_marker_dir()
+        running_file = marker_dir / ".aura-running"
+
+        if running_file.exists():
+            logger.warning("Previous run may have crashed - .aura-running marker found")
+            # Check for crash file
+            crash_file = marker_dir / ".aura-crash"
+            if crash_file.exists():
+                try:
+                    with open(crash_file) as f:
+                        crash_info = f.read()
+                    logger.error(f"Previous crash info: {crash_info}")
+                except:
+                    pass
+            return True
+        return False
+
+    def _mark_running(self):
+        """Mark that AURA is running"""
+        marker_dir = self._get_marker_dir()
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        running_file = marker_dir / ".aura-running"
+        running_file.write_text(
+            f"pid:{os.getpid()}\nstarted:{datetime.now().isoformat()}"
+        )
+
+    def _clear_running_marker(self):
+        """Clear running marker on clean exit"""
+        marker_dir = self._get_marker_dir()
+        (marker_dir / ".aura-running").unlink(missing_ok=True)
+        (marker_dir / ".aura-crash").unlink(missing_ok=True)
+
+    async def save_state(self):
+        """Save current state - called by supervisor for periodic persistence"""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        logger.info("Saving AURA state...")
+
+        # Save neural memory if available
+        if self._neural_memory:
+            try:
+                self._neural_memory.save("memory_state.pkl")
+                logger.info("Neural memory saved")
+            except Exception as e:
+                logger.warning(f"Failed to save neural memory: {e}")
+
+        # Save session if available
+        if self._session_manager:
+            try:
+                await self._session_manager.save_all()
+                logger.info("Session state saved")
+            except Exception as e:
+                logger.warning(f"Failed to save session: {e}")
+
+        logger.info("State save complete")
 
     async def initialize(self):
         """Initialize Tier 0 services — minimum needed for AURA to be alive.
@@ -801,6 +874,15 @@ class AuraProduction:
         logger.info("Starting AURA v3...")
         self._running = True
 
+        # Start debug server if DEBUG_MODE=true (localhost only, dev only)
+        if os.environ.get("DEBUG_MODE", "").lower() == "true":
+            try:
+                debug_port = int(os.environ.get("DEBUG_PORT", "1999"))
+                self._debug_server = DebugServer(self, port=debug_port)
+                await self._debug_server.start()
+            except Exception as e:
+                logger.warning(f"Failed to start debug server: {e}")
+
         # Ensure Tier 1 is loaded before starting services
         await self._ensure_tier1()
 
@@ -930,6 +1012,10 @@ class AuraProduction:
 
         # Stop Mobile Systems
         await self._stop_mobile_systems()
+
+        # Stop Debug Server
+        if self._debug_server:
+            await self._debug_server.stop()
 
         logger.info("AURA v3 stopped")
 
@@ -1184,6 +1270,105 @@ class AuraProduction:
     def set_mobile_config(self, **config):
         """Configure mobile systems at runtime"""
         self._mobile_config.update(config)
+
+
+class DebugServer:
+    """Development-only debug HTTP server - SECURE, localhost only"""
+
+    def __init__(self, aura_instance: AuraProduction, port: int = 1999):
+        self.aura = aura_instance
+        self.port = port
+        self._server = None
+        self._log_buffer: list[str] = []
+        self._max_logs = 500
+
+    def _add_log(self, message: str):
+        """Add log to buffer"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._log_buffer.append(f"[{timestamp}] {message}")
+        if len(self._log_buffer) > self._max_logs:
+            self._log_buffer = self._log_buffer[-self._max_logs :]
+
+    async def start(self):
+        """Start the debug HTTP server"""
+        import asyncio
+        from asyncio import StreamReader, StreamWriter
+
+        async def handle_client(reader: StreamReader, writer: StreamWriter):
+            try:
+                request = await reader.read(4096)
+                request_str = request.decode("utf-8").strip()
+
+                if not request_str:
+                    return
+
+                request_line = request_str.split("\r\n")[0]
+                method, path, _ = request_line.split(" ", 2)
+
+                self._add_log(f"Debug request: {method} {path}")
+
+                response_body = ""
+                status = 200
+
+                if path == "/logs":
+                    n = 100
+                    try:
+                        query_str = request_str.split("\n")[0]
+                        if "n=" in query_str:
+                            n = int(query_str.split("n=")[1].split(" ")[0])
+                    except:
+                        pass
+                    logs = self._log_buffer[-n:]
+                    response_body = "\n".join(logs) if logs else "No logs"
+
+                elif path == "/status":
+                    status_data = self.aura.get_status()
+                    import json
+
+                    response_body = json.dumps(status_data, indent=2, default=str)
+
+                elif path == "/reload":
+                    self._add_log("Config reload requested")
+                    response_body = "Config reload triggered (implementation depends on config system)"
+
+                elif path == "/health":
+                    response_body = json.dumps(
+                        {"status": "ok", "debug_server": "running"}
+                    )
+
+                else:
+                    status = 404
+                    response_body = "Not Found"
+
+                response = (
+                    f"HTTP/1.1 {status} OK\r\n"
+                    f"Content-Type: text/plain\r\n"
+                    f"Content-Length: {len(response_body)}\r\n"
+                    f"Connection: close\r\n"
+                    f"\r\n"
+                    f"{response_body}"
+                )
+                writer.write(response.encode())
+                await writer.drain()
+
+            except Exception as e:
+                self._add_log(f"Debug server error: {e}")
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        self._server = await asyncio.start_server(handle_client, "127.0.0.1", self.port)
+        self._add_log(f"Debug server started on http://127.0.0.1:{self.port}")
+        logger.info(
+            f"Debug server started on http://127.0.0.1:{self.port} (localhost only)"
+        )
+
+    async def stop(self):
+        """Stop the debug server"""
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+            self._add_log("Debug server stopped")
 
 
 # Global instance

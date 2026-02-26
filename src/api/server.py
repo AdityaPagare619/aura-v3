@@ -15,6 +15,7 @@ This enables:
 import asyncio
 import json
 import logging
+import os
 from typing import Optional
 from datetime import datetime
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ import hashlib
 import hmac
 import secrets
 import time
+
 try:
     import yaml
 except ImportError:
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 # SECURITY CONFIGURATION
 # =============================================================================
 
+
 @dataclass
 class SecurityConfig:
     require_auth: bool = True
@@ -46,14 +49,17 @@ class SecurityConfig:
     localhost_only: bool = True
     rate_limit_requests: int = 30
     rate_limit_window: int = 60
-    
+
     @classmethod
     def load_from_file(cls, config_path="config/security.yaml"):
         try:
             with open(config_path) as f:
                 data = yaml.safe_load(f) or {}
                 sec = data.get("security", {})
-                token = sec.get("api_token", "")
+                # Priority: 1. Environment variable, 2. YAML config, 3. Generate new
+                token = os.environ.get("API_TOKEN")
+                if not token:
+                    token = sec.get("api_token", "")
                 if not token:
                     token = secrets.token_urlsafe(32)
                 return cls(
@@ -61,34 +67,45 @@ class SecurityConfig:
                     api_token=token,
                     localhost_only=sec.get("localhost_only", True),
                     rate_limit_requests=sec.get("rate_limit_requests", 30),
-                    rate_limit_window=sec.get("rate_limit_window", 60)
+                    rate_limit_window=sec.get("rate_limit_window", 60),
                 )
         except:
             pass
-        return cls(require_auth=True, api_token=secrets.token_urlsafe(32))
+        return cls(
+            require_auth=True,
+            api_token=os.environ.get("API_TOKEN") or secrets.token_urlsafe(32),
+        )
+
 
 class RateLimiter:
     def __init__(self, max_requests=30, window_seconds=60):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self._requests = {}
-    
+
     def is_allowed(self, request):
         now = time.time()
         client = request.remote
         if client not in self._requests:
             self._requests[client] = []
-        self._requests[client] = [t for t in self._requests[client] if now - t < self.window_seconds]
+        self._requests[client] = [
+            t for t in self._requests[client] if now - t < self.window_seconds
+        ]
         if len(self._requests[client]) >= self.max_requests:
             return False, {"error": "Rate limit exceeded"}
         self._requests[client].append(now)
         return True, {}
 
+
 class AuthMiddleware:
     def __init__(self, config):
         self.config = config
-        self._hash = hashlib.sha256(config.api_token.encode()).hexdigest() if config.api_token else None
-    
+        self._hash = (
+            hashlib.sha256(config.api_token.encode()).hexdigest()
+            if config.api_token
+            else None
+        )
+
     async def authenticate(self, request):
         if not self.config.require_auth:
             return True, None
@@ -102,7 +119,6 @@ class AuthMiddleware:
         if not hmac.compare_digest(token_hash, self._hash):
             return False, "Invalid token"
         return True, None
-
 
 
 @dataclass
@@ -123,17 +139,19 @@ class AuraAPIServer:
 
     SECURED ENDPOINTS (require auth): POST /api/chat, POST /api/feedback
     PUBLIC ENDPOINTS: GET /api/status, /api/inner-voice, /api/feeling, /api/trust
-    
+
     Rate limiting applied to all endpoints.
     """
 
-    PROTECTED_ENDPOINTS = ['/api/chat', '/api/feedback']
+    PROTECTED_ENDPOINTS = ["/api/chat", "/api/feedback"]
 
     def __init__(self, aura_instance=None, security_config=None):
         self.aura = aura_instance
         self._running = False
         self._config = security_config or SecurityConfig.load_from_file()
-        self._rate_limiter = RateLimiter(self._config.rate_limit_requests, self._config.rate_limit_window)
+        self._rate_limiter = RateLimiter(
+            self._config.rate_limit_requests, self._config.rate_limit_window
+        )
         self._auth = AuthMiddleware(self._config)
 
     def _requires_auth(self, path):
@@ -143,17 +161,19 @@ class AuraAPIServer:
         """Start the API server with security middleware"""
         if host is None:
             host = "127.0.0.1" if self._config.localhost_only else "0.0.0.0"
-        
+
         if not self._config.require_auth:
             logger.warning("SECURITY: Authentication is DISABLED!")
-        
-        logger.info(f"API Token: {self._config.api_token[:8]}... (set in config/security.yaml)")
-        
+
+        logger.info(
+            f"API Token: {self._config.api_token[:8]}... (set in config/security.yaml)"
+        )
+
         try:
             from aiohttp import web
-            
+
             self.app = web.Application(middlewares=[self._security_middleware])
-            
+
             # Auth status endpoint
             self.app.router.add_get("/api/auth/status", self.handle_auth_status)
             self.app.router.add_post("/api/chat", self.handle_chat)
@@ -189,13 +209,14 @@ class AuraAPIServer:
             allowed, info = self._rate_limiter.is_allowed(request)
             if not allowed:
                 return web.json_response(info, status=429)
-            
+
             if self._requires_auth(request.path):
                 auth, msg = await self._auth.authenticate(request)
                 if not auth:
                     return web.json_response({"error": msg}, status=401)
-            
+
             return await handler(request)
+
         return middleware
 
     async def handle_auth_status(self, request):
@@ -376,7 +397,9 @@ class AuraAPIServer:
 _server: Optional[AuraAPIServer] = None
 
 
-async def start_aura_server(aura_instance=None, host=None, port=5000, security_config=None):
+async def start_aura_server(
+    aura_instance=None, host=None, port=5000, security_config=None
+):
     """Start the AURA API server with security defaults"""
     global _server
     _server = AuraAPIServer(aura_instance, security_config)

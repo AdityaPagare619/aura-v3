@@ -13,6 +13,7 @@ Mobile-specific power management:
 import asyncio
 import shlex
 import logging
+import subprocess
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -125,11 +126,27 @@ class MobilePowerManager:
             if "true" in result.lower():
                 self._screen_state = ScreenState.ON
             else:
-                self._screen_state = ScreenState.OFF
+                # Also check for Doze state
+                await self._check_doze_state()
         except:
             self._screen_state = ScreenState.ON  # Default assumption
 
         self._last_screen_check = datetime.now()
+
+    async def _check_doze_state(self):
+        """Check if device is in Doze mode - FAILSAFE"""
+        try:
+            result = await self._run_termux_cmd(
+                "dumpsys idle | grep 'mState' || echo 'unknown'"
+            )
+            if "IDLE" in result.upper() or "DOZING" in result.upper():
+                self._screen_state = ScreenState.DOZE
+                logger.info("Device entered Doze mode")
+            else:
+                self._screen_state = ScreenState.OFF
+        except:
+            # Failsafe: if check fails, assume OFF not DOZE
+            self._screen_state = ScreenState.OFF
 
     def _update_power_mode(self):
         """Update power mode based on battery"""
@@ -180,8 +197,6 @@ class MobilePowerManager:
 
     async def _run_termux_cmd(self, cmd: str) -> str:
         """Run a Termux command - SECURED: uses list args instead of shell=True"""
-        import subprocess
-
         try:
             # FIXED: Use list args to avoid shell injection
             cmd_list = shlex.split(cmd)
@@ -191,6 +206,78 @@ class MobilePowerManager:
             return result.stdout if result.returncode == 0 else ""
         except:
             return ""
+
+    def is_termux(self) -> bool:
+        """Check if running in Termux"""
+        import os
+
+        return os.path.exists("/data/data/com.termux")
+
+    async def acquire_wake_lock(self) -> bool:
+        """Acquire termux wake-lock to keep CPU awake"""
+        if not self.is_termux():
+            return False
+        try:
+            result = subprocess.run(
+                ["termux-wake-lock"], capture_output=True, timeout=5
+            )
+            if result.returncode == 0:
+                logger.info("Wake-lock acquired")
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to acquire wake-lock: {e}")
+        return False
+
+    async def release_wake_lock(self) -> bool:
+        """Release termux wake-lock"""
+        if not self.is_termux():
+            return False
+        try:
+            result = subprocess.run(
+                ["termux-wake-release"], capture_output=True, timeout=5
+            )
+            if result.returncode == 0:
+                logger.info("Wake-lock released")
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to release wake-lock: {e}")
+        return False
+
+    def check_memory_pressure(self) -> str:
+        """Check memory pressure level using psutil
+        Returns: 'normal', 'moderate', or 'critical'
+        """
+        try:
+            import psutil
+
+            mem = psutil.virtual_memory()
+            free_percent = mem.available / mem.total * 100
+
+            if free_percent > 30:
+                return "normal"
+            elif free_percent > 15:
+                return "moderate"
+            else:
+                return "critical"
+        except ImportError:
+            return "normal"
+        except Exception:
+            return "normal"
+
+    async def check_resources(self) -> dict:
+        """Check all resource levels"""
+        await self._check_battery()
+        await self._check_screen_state()
+
+        memory_status = self.check_memory_pressure()
+
+        return {
+            "battery": self._battery_level,
+            "charging": self._is_charging,
+            "power_mode": self._power_mode.value,
+            "screen": self._screen_state.value,
+            "memory": memory_status,
+        }
 
     def get_power_mode(self) -> PowerMode:
         """Get current power mode"""
@@ -287,8 +374,17 @@ class MobilePowerManager:
         await self._check_battery()
         await self._check_screen_state()
 
+        memory_status = self.check_memory_pressure()
+        if memory_status == "critical":
+            logger.warning(f"Critical memory pressure: {memory_status}")
+        elif memory_status == "moderate":
+            logger.info(f"Moderate memory pressure: {memory_status}")
+
         if previous_screen_state != self._screen_state:
-            if self._screen_state == ScreenState.OFF:
+            if self._screen_state == ScreenState.DOZE:
+                logger.info("Entering Doze mode - pausing non-essential tasks")
+                self.optimize_for_screen_off()
+            elif self._screen_state == ScreenState.OFF:
                 self.optimize_for_screen_off()
             else:
                 self.optimize_for_screen_on()

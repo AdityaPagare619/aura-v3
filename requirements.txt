@@ -13,6 +13,7 @@
 aiofiles>=23.0.0          # Async file operations
 pyyaml>=6.0               # Configuration parsing
 cryptography>=41.0.0      # Encryption for secure storage
+psutil>=5.9.0             # System monitoring (CPU, memory, etc.)
 
 # -----------------------------------------------------------------------------
 # Telegram Bot (Required for Telegram mode)

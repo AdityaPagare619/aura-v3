@@ -78,6 +78,297 @@ class UnauthorizedError(Exception):
     pass
 
 
+# =============================================================================
+# RepairableException Pattern (Inspired by Agent Zero)
+# Self-healing errors that provide LLM-readable context for recovery
+# =============================================================================
+
+
+class RepairableException(Exception):
+    """
+    Base exception that provides LLM-readable context for self-healing.
+
+    Inspired by Agent Zero's error handling pattern - errors become prompts
+    that guide the agent to fix itself. When caught, these exceptions provide
+    rich context that can be forwarded to the LLM for reasoning about recovery.
+
+    Usage:
+        raise RepairableException(
+            "File not found: config.yaml",
+            recovery_hint="Check if config file exists or create with defaults",
+            suggested_actions=["create_default_config", "check_path_permissions"],
+            context={"path": "config.yaml", "operation": "read_config"}
+        )
+    """
+
+    def __init__(
+        self,
+        message: str,
+        recovery_hint: str = "",
+        context: Dict[str, Any] = None,
+        suggested_actions: List[str] = None,
+        is_retriable: bool = True,
+        severity: ErrorSeverity = ErrorSeverity.MEDIUM,
+        category: ErrorCategory = ErrorCategory.UNKNOWN,
+    ):
+        super().__init__(message)
+        self.message = message
+        self.recovery_hint = recovery_hint
+        self.context = context or {}
+        self.suggested_actions = suggested_actions or []
+        self.is_retriable = is_retriable
+        self.severity = severity
+        self.category = category
+        self.timestamp = datetime.now()
+
+    def to_llm_prompt(self) -> str:
+        """
+        Convert to LLM-readable error context for self-healing.
+
+        Returns a structured prompt that helps the LLM understand what went wrong
+        and how to recover, enabling Agent Zero-style self-repair.
+        """
+        import json
+
+        parts = [
+            f"ERROR OCCURRED: {self.message}",
+            f"SEVERITY: {self.severity.value}",
+            f"CATEGORY: {self.category.value}",
+        ]
+
+        if self.recovery_hint:
+            parts.append(f"RECOVERY HINT: {self.recovery_hint}")
+
+        if self.context:
+            # Sanitize sensitive keys
+            safe_context = {
+                k: (
+                    "***"
+                    if any(
+                        s in k.lower()
+                        for s in ["password", "token", "secret", "key", "pin"]
+                    )
+                    else v
+                )
+                for k, v in self.context.items()
+            }
+            parts.append(f"CONTEXT: {json.dumps(safe_context, indent=2, default=str)}")
+
+        if self.suggested_actions:
+            parts.append(f"SUGGESTED ACTIONS: {', '.join(self.suggested_actions)}")
+
+        parts.append(f"IS RETRIABLE: {self.is_retriable}")
+
+        parts.append("""
+Based on this error, please:
+1. Analyze what went wrong
+2. Consider the suggested actions  
+3. Choose an alternative approach or fix the issue
+4. If not retriable, inform the user gracefully""")
+
+        return "\n".join(parts)
+
+    def to_observation(self) -> Dict[str, Any]:
+        """
+        Convert to a structured observation for the ReAct loop.
+
+        This format integrates with AURA's ReAct agent loop, allowing the error
+        to be processed as an observation that triggers reflection and adaptation.
+        """
+        return {
+            "type": "error",
+            "success": False,
+            "error": self.message,
+            "error_type": self.__class__.__name__,
+            "severity": self.severity.value,
+            "category": self.category.value,
+            "recovery_hint": self.recovery_hint,
+            "suggested_actions": self.suggested_actions,
+            "is_retriable": self.is_retriable,
+            "context": self.context,
+            "llm_prompt": self.to_llm_prompt(),
+        }
+
+
+class ToolExecutionError(RepairableException):
+    """
+    Tool execution failed - LLM can try alternative tools or parameters.
+
+    Example:
+        raise ToolExecutionError(
+            "send_whatsapp failed: Contact not found",
+            recovery_hint="Try searching for the contact or ask user for correct name",
+            suggested_actions=["search_contacts", "ask_clarification"],
+            context={"tool": "send_whatsapp", "contact": "John"}
+        )
+    """
+
+    def __init__(
+        self,
+        message: str,
+        tool_name: str = "",
+        parameters: Dict[str, Any] = None,
+        **kwargs,
+    ):
+        context = kwargs.pop("context", {})
+        context.update(
+            {
+                "tool_name": tool_name,
+                "parameters": parameters or {},
+            }
+        )
+        super().__init__(
+            message, category=ErrorCategory.SYSTEM, context=context, **kwargs
+        )
+        self.tool_name = tool_name
+        self.parameters = parameters or {}
+
+
+class ResourceError(RepairableException):
+    """
+    Resource unavailable - LLM can wait, use alternatives, or reduce load.
+
+    Example:
+        raise ResourceError(
+            "Insufficient memory to load model",
+            recovery_hint="Try unloading other models or using smaller variant",
+            suggested_actions=["unload_models", "use_smaller_model", "wait_and_retry"]
+        )
+    """
+
+    def __init__(self, message: str, resource_type: str = "", **kwargs):
+        context = kwargs.pop("context", {})
+        context["resource_type"] = resource_type
+        super().__init__(
+            message,
+            category=ErrorCategory.RESOURCE,
+            severity=ErrorSeverity.HIGH,
+            context=context,
+            **kwargs,
+        )
+        self.resource_type = resource_type
+
+
+class NetworkError(RepairableException):
+    """
+    Network operation failed - LLM can retry, use cached data, or go offline.
+
+    Example:
+        raise NetworkError(
+            "API request timed out",
+            recovery_hint="Check connectivity, retry with backoff, or use cached response",
+            suggested_actions=["retry_with_backoff", "use_cached", "notify_offline"]
+        )
+    """
+
+    def __init__(self, message: str, endpoint: str = "", **kwargs):
+        context = kwargs.pop("context", {})
+        context["endpoint"] = endpoint
+        super().__init__(
+            message,
+            category=ErrorCategory.TRANSIENT,
+            severity=ErrorSeverity.LOW,
+            is_retriable=True,
+            context=context,
+            **kwargs,
+        )
+        self.endpoint = endpoint
+
+
+class PermissionDeniedError(RepairableException):
+    """
+    Permission denied - LLM can request permission or use workaround.
+
+    Example:
+        raise PermissionDeniedError(
+            "Cannot access camera without permission",
+            recovery_hint="Request camera permission or explain why it's needed",
+            suggested_actions=["request_permission", "explain_need", "use_alternative"]
+        )
+    """
+
+    def __init__(self, message: str, permission: str = "", **kwargs):
+        context = kwargs.pop("context", {})
+        context["permission"] = permission
+        super().__init__(
+            message,
+            category=ErrorCategory.AUTHENTICATION,
+            severity=ErrorSeverity.MEDIUM,
+            is_retriable=False,
+            context=context,
+            **kwargs,
+        )
+        self.permission = permission
+
+
+class ValidationError(RepairableException):
+    """
+    Input validation failed - LLM can fix input or ask for clarification.
+
+    Example:
+        raise ValidationError(
+            "Invalid phone number format",
+            recovery_hint="Phone number should be 10 digits or include country code",
+            suggested_actions=["fix_format", "ask_clarification"],
+            context={"input": "123-abc", "expected_format": "10 digits"}
+        )
+    """
+
+    def __init__(self, message: str, field: str = "", expected: str = "", **kwargs):
+        context = kwargs.pop("context", {})
+        context.update({"field": field, "expected_format": expected})
+        super().__init__(
+            message,
+            category=ErrorCategory.VALIDATION,
+            severity=ErrorSeverity.LOW,
+            is_retriable=True,
+            context=context,
+            **kwargs,
+        )
+        self.field = field
+        self.expected = expected
+
+
+class HandledException(Exception):
+    """
+    Fatal error that should stop the ReAct loop gracefully.
+
+    Inspired by Agent Zero - this exception indicates the error has been handled
+    and the loop should terminate with a user-friendly message, not retry.
+    """
+
+    def __init__(self, message: str, user_message: str = ""):
+        super().__init__(message)
+        self.user_message = user_message or message
+
+    def get_user_message(self) -> str:
+        """Get the user-friendly message to display"""
+        return self.user_message
+
+
+class InterventionRequired(Exception):
+    """
+    User intervention is required to proceed.
+
+    Inspired by Agent Zero - this exception pauses the loop and asks the user
+    for input or confirmation before continuing.
+    """
+
+    def __init__(self, message: str, question: str = "", options: List[str] = None):
+        super().__init__(message)
+        self.question = question or message
+        self.options = options or []
+
+    def get_prompt(self) -> str:
+        """Get the prompt to show the user"""
+        if self.options:
+            options_str = "\n".join(
+                f"  {i + 1}. {opt}" for i, opt in enumerate(self.options)
+            )
+            return f"{self.question}\n{options_str}"
+        return self.question
+
+
 class ErrorClassifier:
     """Classifies errors to determine recovery strategy"""
 
