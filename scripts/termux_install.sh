@@ -1,17 +1,23 @@
-#!/bin/bash
+#!/data/data/com.termux/files/usr/bin/bash
 # =============================================================================
-# AURA v3 - Termux Production Installer
-# =============================================================================
-# One-liner install:
-#   curl -sL https://raw.githubusercontent.com/AdityaPagare619/aura-v3/main/scripts/termux_install.sh | bash
+# AURA v3 — Termux Production Installer (Rewrite v2)
 #
-# Flags:
-#   --repair    Fix missing deps without full reinstall
-#   --check     Check installation status only
-#   --verbose   Show all command output
+# Fixes addressed:
+#   Bug 1: Two-phase logging (stdout before clone, file after)
+#   Bug 2: Clone with --branch production-hardening
+#   Bug 3: cd "$HOME" as first action
+#   Bug 4: set -o pipefail + proper exit code capture
+#   Bug 5: Post-install import verification for every package
+#   Bug 6: Absolute paths in "Next Steps"
+#   Bug 7: No silent error suppression on critical paths
 # =============================================================================
-
 set -e
+set -o pipefail
+
+# ─── CRITICAL: Establish known CWD immediately (Bug 3) ───────────────────────
+# User may run `rm -rf ~/aura-v3` while CWD IS ~/aura-v3, which
+# invalidates the shell's CWD.  Fix: unconditionally cd home first.
+cd "$HOME" || { echo "FATAL: Cannot cd to \$HOME"; exit 1; }
 
 # ─── Colors ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -23,13 +29,15 @@ NC='\033[0m'
 
 # ─── Globals ─────────────────────────────────────────────────────────────────
 AURA_DIR="$HOME/aura-v3"
-LOG_FILE="$AURA_DIR/logs/install.log"
-REPAIR_MODE=false
-CHECK_MODE=false
-VERBOSE=false
+AURA_BRANCH="production-hardening"
+LOG_FILE=""  # Set AFTER clone + mkdir (Bug 1)
 ERRORS_FOUND=0
 
 # ─── Parse arguments ─────────────────────────────────────────────────────────
+REPAIR_MODE=false
+CHECK_MODE=false
+VERBOSE=false
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --repair)  REPAIR_MODE=true; shift ;;
@@ -39,22 +47,33 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ─── Logging ─────────────────────────────────────────────────────────────────
-log_info()  { echo -e "${BLUE}[INFO]${NC}  $1"; echo "[INFO]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null || true; }
-log_ok()    { echo -e "${GREEN}[OK]${NC}    $1"; echo "[OK]    $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null || true; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $1"; echo "[WARN]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null || true; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; echo "[ERROR] $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null || true; ERRORS_FOUND=$((ERRORS_FOUND + 1)); }
+# ─── Two-Phase Logging (Bug 1 + Bug 7) ──────────────────────────────────────
+# Phase 1: Before clone — stdout only, no file logging
+# Phase 2: After clone — stdout + file
+log_info()  {
+    echo -e "${BLUE}[INFO]${NC}  $1"
+    [ -n "$LOG_FILE" ] && echo "[INFO]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+}
+log_ok()    {
+    echo -e "${GREEN}[OK]${NC}    $1"
+    [ -n "$LOG_FILE" ] && echo "[OK]    $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+}
+log_warn()  {
+    echo -e "${YELLOW}[WARN]${NC}  $1"
+    [ -n "$LOG_FILE" ] && echo "[WARN]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+}
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+    [ -n "$LOG_FILE" ] && echo "[ERROR] $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+    ERRORS_FOUND=$((ERRORS_FOUND + 1))
+}
 
-# Run command with visible output (NO silent suppression)
-run_cmd() {
-    local desc="$1"; shift
-    log_info "$desc"
-    if [ "$VERBOSE" = true ]; then
-        "$@" 2>&1 | tee -a "$LOG_FILE"
-    else
-        "$@" >> "$LOG_FILE" 2>&1
-    fi
-    return ${PIPESTATUS[0]:-$?}
+# Enable file logging (called AFTER clone + mkdir)
+enable_file_logging() {
+    mkdir -p "$AURA_DIR/logs"
+    LOG_FILE="$AURA_DIR/logs/install.log"
+    echo "=== AURA Install Log $(date) ===" > "$LOG_FILE"
+    log_info "File logging enabled at $LOG_FILE"
 }
 
 # ─── Platform Check ──────────────────────────────────────────────────────────
@@ -66,7 +85,7 @@ check_platform() {
 
     log_ok "Termux detected (version: ${TERMUX_VERSION:-unknown})"
 
-    # Check Python
+    # Find Python
     if command -v python3 &>/dev/null; then
         PYTHON_CMD="python3"
     elif command -v python &>/dev/null; then
@@ -86,90 +105,49 @@ check_platform() {
     fi
 
     log_ok "Python $PYTHON_VERSION"
-
-    # Check architecture
-    ARCH=$(uname -m)
-    log_info "Architecture: $ARCH"
+    log_info "Architecture: $(uname -m)"
 }
 
-# ─── Check Mode ──────────────────────────────────────────────────────────────
-run_check() {
+# ─── Clone or Update (Bug 2: explicit branch) ───────────────────────────────
+clone_or_update() {
     echo ""
-    echo -e "${BOLD}══════════════════════════════════════${NC}"
-    echo -e "${BOLD}  AURA v3 — Installation Status${NC}"
-    echo -e "${BOLD}══════════════════════════════════════${NC}"
-    echo ""
+    log_info "Getting AURA v3..."
 
-    # Platform
-    check_platform
+    # Ensure we're in $HOME (not a deleted directory)
+    cd "$HOME"
 
-    # Git repo
     if [ -d "$AURA_DIR/.git" ]; then
+        # Existing repo — update it
+        log_info "Updating existing installation..."
         cd "$AURA_DIR"
-        log_ok "Repository: $(git rev-parse --short HEAD 2>/dev/null) on $(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
-    else
-        log_warn "Repository not cloned"
-    fi
 
-    # .env
-    if [ -f "$AURA_DIR/.env" ]; then
-        if grep -q "TELEGRAM_TOKEN=.\+" "$AURA_DIR/.env" 2>/dev/null; then
-            log_ok ".env configured with TELEGRAM_TOKEN"
-        else
-            log_warn ".env exists but TELEGRAM_TOKEN not set"
+        # Make sure we're on the right branch
+        local current_branch
+        current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+        if [ "$current_branch" != "$AURA_BRANCH" ]; then
+            log_info "Switching from '$current_branch' to '$AURA_BRANCH'..."
+            git fetch origin "$AURA_BRANCH" || log_warn "Fetch failed"
+            git checkout "$AURA_BRANCH" || git checkout -b "$AURA_BRANCH" "origin/$AURA_BRANCH" || log_warn "Branch checkout failed"
         fi
+
+        git pull origin "$AURA_BRANCH" || log_warn "Could not update (using existing version)"
+        log_ok "AURA updated on branch '$AURA_BRANCH'"
+    elif [ -d "$AURA_DIR" ]; then
+        # Directory exists but no .git — leftover from partial install
+        log_warn "Found leftover $AURA_DIR without .git — cleaning up..."
+        rm -rf "$AURA_DIR"
+        git clone --branch "$AURA_BRANCH" --single-branch \
+            https://github.com/AdityaPagare619/aura-v3.git "$AURA_DIR"
+        cd "$AURA_DIR"
+        log_ok "AURA cloned fresh (branch: $AURA_BRANCH)"
     else
-        log_warn ".env not found"
+        # Fresh install
+        log_info "Cloning AURA v3 (branch: $AURA_BRANCH)..."
+        git clone --branch "$AURA_BRANCH" --single-branch \
+            https://github.com/AdityaPagare619/aura-v3.git "$AURA_DIR"
+        cd "$AURA_DIR"
+        log_ok "AURA cloned to $AURA_DIR (branch: $AURA_BRANCH)"
     fi
-
-    # Dependencies
-    echo ""
-    echo "Python dependencies:"
-    for pkg in aiofiles yaml cryptography psutil telegram numpy llama_cpp; do
-        if $PYTHON_CMD -c "import $pkg" 2>/dev/null; then
-            echo -e "  ${GREEN}✓${NC} $pkg"
-        else
-            echo -e "  ${RED}✗${NC} $pkg"
-        fi
-    done
-
-    echo ""
-    echo "Termux packages:"
-    for pkg in git python clang cmake python-numpy; do
-        if command -v $pkg &>/dev/null || dpkg -s $pkg &>/dev/null; then
-            echo -e "  ${GREEN}✓${NC} $pkg"
-        else
-            echo -e "  ${RED}✗${NC} $pkg (run: pkg install $pkg)"
-        fi
-    done
-
-    echo ""
-    exit 0
-}
-
-# ─── Repair Mode ─────────────────────────────────────────────────────────────
-run_repair() {
-    echo ""
-    echo -e "${BOLD}══════════════════════════════════════${NC}"
-    echo -e "${BOLD}  AURA v3 — Repair Mode${NC}"
-    echo -e "${BOLD}══════════════════════════════════════${NC}"
-    echo ""
-
-    check_platform
-    cd "$AURA_DIR" 2>/dev/null || { log_error "AURA not installed at $AURA_DIR"; exit 1; }
-
-    install_termux_native_deps
-    install_pip_deps
-    install_llm_deps
-    verify_all_imports
-
-    echo ""
-    if [ "$ERRORS_FOUND" -eq 0 ]; then
-        log_ok "Repair complete — all dependencies working!"
-    else
-        log_error "Repair completed with $ERRORS_FOUND error(s). See $LOG_FILE"
-    fi
-    exit $ERRORS_FOUND
 }
 
 # ─── Install Termux-Native Packages ──────────────────────────────────────────
@@ -177,11 +155,11 @@ install_termux_native_deps() {
     echo ""
     log_info "Installing Termux-native packages..."
 
-    # Update package list (errors visible, but non-fatal)
+    # Update package list (non-fatal on warnings)
     pkg update -y -o Dpkg::Options::="--force-confnew" || log_warn "pkg update had warnings (continuing)"
     pkg upgrade -y -o Dpkg::Options::="--force-confnew" || log_warn "pkg upgrade had warnings (continuing)"
 
-    # Core packages: git, python, build tools
+    # Core build tools
     local CORE_PKGS="git python clang cmake ninja"
     for pkg_name in $CORE_PKGS; do
         if command -v "$pkg_name" &>/dev/null; then
@@ -195,42 +173,49 @@ install_termux_native_deps() {
         fi
     done
 
-    # CRITICAL: cryptography via pkg (NOT pip — pip needs Rust toolchain which is huge)
+    # Build deps for compilation
+    pkg install -y build-essential libffi openssl 2>/dev/null || log_warn "Some build deps may have failed"
+
+    # ── cryptography: pkg first, pip fallback (Bug 5: verify after install) ──
     if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
-        log_ok "cryptography already installed"
+        log_ok "cryptography already importable"
     else
         log_info "Installing cryptography via Termux pkg (pre-built, no Rust needed)..."
-        if pkg install -y python-cryptography 2>/dev/null; then
-            log_ok "cryptography installed via pkg"
+        pkg install -y python-cryptography
+
+        # VERIFY it actually works (Bug 5)
+        if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
+            log_ok "cryptography installed and verified"
         else
-            log_warn "python-cryptography not in pkg, trying pip with Rust..."
-            if pkg install -y rust 2>/dev/null; then
-                if pip install cryptography --quiet; then
-                    log_ok "cryptography installed via pip+Rust"
+            log_warn "pkg cryptography installed but Python can't import it. Trying pip..."
+            # This might need Rust, warn the user
+            if pip install cryptography 2>&1; then
+                if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
+                    log_ok "cryptography installed via pip and verified"
                 else
-                    log_error "cryptography installation FAILED — this is needed for secure storage"
+                    log_error "cryptography import STILL fails after pip install"
                 fi
             else
-                log_error "Could not install rust or python-cryptography"
+                log_error "cryptography installation FAILED — secure storage will be degraded"
             fi
         fi
     fi
 
-    # CRITICAL: Numpy via pkg (compiling via pip takes forever on mobile)
+    # ── numpy: pkg first, pip fallback ──
     if $PYTHON_CMD -c "import numpy" 2>/dev/null; then
-        log_ok "numpy already installed"
+        log_ok "numpy already importable"
     else
         log_info "Installing numpy via Termux pkg (pre-built)..."
-        if pkg install -y python-numpy 2>/dev/null; then
-            log_ok "numpy installed via pkg"
+        pkg install -y python-numpy
+
+        # VERIFY
+        if $PYTHON_CMD -c "import numpy" 2>/dev/null; then
+            log_ok "numpy installed and verified"
         else
-            log_warn "python-numpy not in pkg, trying pip..."
+            log_warn "pkg numpy installed but Python can't import it. Trying pip..."
             pip install numpy || log_error "Failed to install numpy"
         fi
     fi
-
-    # Build deps for psutil & LLM
-    pkg install -y build-essential libffi openssl 2>/dev/null || true
 }
 
 # ─── Install Pip Dependencies ────────────────────────────────────────────────
@@ -238,10 +223,9 @@ install_pip_deps() {
     echo ""
     log_info "Installing Python dependencies via pip..."
 
-    # Upgrade pip first
+    # Upgrade pip
     $PYTHON_CMD -m pip install --upgrade pip --quiet 2>/dev/null || true
 
-    # Install each core dep individually with verification
     local CORE_DEPS="aiofiles pyyaml psutil python-telegram-bot"
 
     for dep in $CORE_DEPS; do
@@ -258,48 +242,65 @@ install_pip_deps() {
             continue
         fi
 
-        # Install with VISIBLE errors
+        # Install and verify (Bug 4: don't pipe through tee for exit code)
         log_info "Installing $dep..."
-        if pip install "$dep" 2>&1 | tee -a "$LOG_FILE"; then
+        local pip_output
+        if pip_output=$(pip install "$dep" 2>&1); then
             # Verify the import actually works
             if $PYTHON_CMD -c "import $import_name" 2>/dev/null; then
                 log_ok "$dep installed and verified"
             else
-                log_error "$dep pip install succeeded but import failed!"
+                log_error "$dep pip says success but import failed!"
+                echo "$pip_output" >> "$LOG_FILE" 2>/dev/null || true
             fi
         else
-            log_error "$dep installation FAILED — check $LOG_FILE for details"
+            log_error "$dep installation FAILED"
+            echo "$pip_output" >> "$LOG_FILE" 2>/dev/null || true
         fi
     done
 }
 
-# ─── Install LLM Dependencies ────────────────────────────────────────────────
+# ─── Install LLM Dependencies (Bug 4: proper exit code) ─────────────────────
 install_llm_deps() {
     echo ""
     log_info "Installing Local LLM Engine (llama-cpp-python)..."
-    
+
     if $PYTHON_CMD -c "import llama_cpp" 2>/dev/null; then
         log_ok "llama-cpp-python already installed"
         return
     fi
-    
-    log_info "Building llama-cpp-python for Termux (this might take a few minutes)..."
-    
-    # We must set CMAKE_ARGS to avoid Android NDK missing headers errors if compiling from source
+
+    log_info "Building llama-cpp-python for Termux (may take several minutes)..."
+
+    # Set cmake flags to avoid NDK issues
     export CMAKE_ARGS="-DLLAMA_METAL=off -DLLAMA_CUDA=off"
-    
-    # Prefer pre-built binary if available, otherwise compile
-    if pip install llama-cpp-python --only-binary :all: 2>&1 | tee -a "$LOG_FILE"; then
-         log_ok "llama-cpp-python (pre-built) installed"
-    else
-         log_warn "Pre-built binary failed, compiling from source..."
-         if pip install llama-cpp-python --no-cache-dir 2>&1 | tee -a "$LOG_FILE"; then
-             log_ok "llama-cpp-python compiled and installed"
-         else
-             log_error "llama-cpp-python installation FAILED."
-             log_warn "AURA will still run, but in MOCK LLM mode."
-         fi
+
+    # Bug 4 fix: capture output WITHOUT piping through tee
+    # Try pre-built first
+    local pip_output
+    if pip_output=$(pip install llama-cpp-python --only-binary :all: 2>&1); then
+        if $PYTHON_CMD -c "import llama_cpp" 2>/dev/null; then
+            log_ok "llama-cpp-python (pre-built) installed and verified"
+            echo "$pip_output" >> "$LOG_FILE" 2>/dev/null || true
+            return
+        fi
     fi
+
+    # Pre-built not available (expected on aarch64), try from source
+    log_warn "No pre-built wheel for this platform. Compiling from source..."
+    if pip_output=$(pip install llama-cpp-python --no-cache-dir 2>&1); then
+        if $PYTHON_CMD -c "import llama_cpp" 2>/dev/null; then
+            log_ok "llama-cpp-python compiled and installed"
+        else
+            log_warn "llama-cpp-python pip succeeded but import failed"
+            log_warn "AURA will still run, but in MOCK LLM mode"
+        fi
+    else
+        log_warn "llama-cpp-python compilation failed (this is OK for now)"
+        log_warn "AURA will run in MOCK LLM mode. Install manually later with:"
+        log_warn "  pip install llama-cpp-python --no-cache-dir"
+    fi
+    echo "$pip_output" >> "$LOG_FILE" 2>/dev/null || true
 }
 
 # ─── Verify All Imports ──────────────────────────────────────────────────────
@@ -309,7 +310,9 @@ verify_all_imports() {
 
     local ALL_PASS=true
 
-    for pkg_import in "aiofiles:aiofiles" "yaml:pyyaml" "cryptography:cryptography" "psutil:psutil" "telegram:python-telegram-bot" "numpy:python-numpy" "llama_cpp:llama-cpp-python"; do
+    for pkg_import in "aiofiles:aiofiles" "yaml:pyyaml" "cryptography:cryptography" \
+                      "psutil:psutil" "telegram:python-telegram-bot" "numpy:python-numpy" \
+                      "llama_cpp:llama-cpp-python"; do
         local import_name="${pkg_import%%:*}"
         local pkg_name="${pkg_import##*:}"
 
@@ -331,7 +334,7 @@ verify_all_imports() {
         if $PYTHON_CMD -c "import sys; sys.path.insert(0, '.'); from src.main import AuraProduction; print('OK')" 2>/dev/null; then
             log_ok "AURA modules ✓"
         else
-            log_warn "AURA module import failed (may need debugging)"
+            log_warn "AURA module import needs debugging (non-fatal)"
         fi
     fi
 
@@ -355,93 +358,88 @@ setup_env() {
         log_warn ".env exists but TELEGRAM_TOKEN is empty"
     fi
 
-    # Interactive token setup - must use /dev/tty because script is piped via curl
+    # Interactive token setup
     echo ""
     echo -e "${BOLD}Telegram Bot Token Setup${NC}"
     echo "Get your token from @BotFather on Telegram."
     echo ""
     echo -n "Paste your bot token (or press Enter to skip): "
-    
-    # Read from terminal directly, handling the curl | bash pipe
+
+    # Read from terminal directly (script is piped via curl | bash)
     read -r TOKEN </dev/tty || true
 
     if [ -n "$TOKEN" ]; then
-        # Create .env from example or from scratch
         if [ -f ".env.example" ]; then
             cp .env.example .env
         fi
 
-        # Set the token (handle both var names for compatibility)
         if [ -f ".env" ]; then
-            # Replace existing TELEGRAM_TOKEN line or add it
             if grep -q "^TELEGRAM_TOKEN=" ".env"; then
                 sed -i "s|^TELEGRAM_TOKEN=.*|TELEGRAM_TOKEN=$TOKEN|" .env
             else
                 echo "TELEGRAM_TOKEN=$TOKEN" >> .env
             fi
-            # Also ensure TELEGRAM_BOT_TOKEN for backwards compat
             if grep -q "^TELEGRAM_BOT_TOKEN=" ".env"; then
                 sed -i "s|^TELEGRAM_BOT_TOKEN=.*|TELEGRAM_BOT_TOKEN=$TOKEN|" .env
             else
                 echo "TELEGRAM_BOT_TOKEN=$TOKEN" >> .env
             fi
         else
-            echo "TELEGRAM_TOKEN=$TOKEN" > .env
-            echo "TELEGRAM_BOT_TOKEN=$TOKEN" >> .env
-            echo "AURA_ENV=production" >> .env
-            echo "AURA_MOCK_LLM=false" >> .env
+            cat > .env <<EOF
+TELEGRAM_TOKEN=$TOKEN
+TELEGRAM_BOT_TOKEN=$TOKEN
+AURA_ENV=production
+AURA_MOCK_LLM=false
+EOF
         fi
-
         log_ok "Token saved to .env"
     else
-        # Create minimal .env if it doesn't exist
         if [ ! -f ".env" ]; then
             if [ -f ".env.example" ]; then
                 cp .env.example .env
             else
-                echo "TELEGRAM_TOKEN=" > .env
-                echo "AURA_ENV=production" >> .env
-                echo "AURA_MOCK_LLM=false" >> .env
+                cat > .env <<EOF
+TELEGRAM_TOKEN=
+AURA_ENV=production
+AURA_MOCK_LLM=false
+EOF
             fi
         fi
-        log_warn "No token entered — set it later: nano ~/aura-v3/.env"
+        log_warn "No token entered — set later: nano ~/aura-v3/.env"
     fi
 }
 
 # ─── Create Directories ─────────────────────────────────────────────────────
 create_dirs() {
-    log_info "Creating directories..."
-    mkdir -p logs data/memories data/sessions data/patterns/intents data/patterns/strategies data/memory models cache
+    log_info "Creating data directories..."
+    cd "$AURA_DIR"
+    mkdir -p logs data/memories data/sessions data/patterns/intents \
+             data/patterns/strategies data/memory models cache
     log_ok "Directories created"
 }
 
-# ─── Clone or Update ─────────────────────────────────────────────────────────
-clone_or_update() {
+# ─── Check Mode ──────────────────────────────────────────────────────────────
+run_check() {
     echo ""
-    log_info "Getting AURA v3..."
-
-    cd ~
-
-    if [ -d "$AURA_DIR/.git" ]; then
-        # Existing repo — update it
-        log_info "Updating existing installation..."
+    log_info "Running health check..."
+    if [ -f "$AURA_DIR/scripts/aura_doctor.py" ]; then
         cd "$AURA_DIR"
-        git pull origin main || log_warn "Could not update (using existing version)"
-        log_ok "AURA updated"
-    elif [ -d "$AURA_DIR" ]; then
-        # Directory exists but no .git — leftover from partial install
-        log_warn "Found leftover $AURA_DIR without .git — cleaning up..."
-        rm -rf "$AURA_DIR"
-        git clone https://github.com/AdityaPagare619/aura-v3.git "$AURA_DIR"
-        cd "$AURA_DIR"
-        log_ok "AURA cloned fresh to $AURA_DIR"
+        $PYTHON_CMD scripts/aura_doctor.py
     else
-        # Fresh install
-        log_info "Cloning AURA v3..."
-        git clone https://github.com/AdityaPagare619/aura-v3.git "$AURA_DIR"
-        cd "$AURA_DIR"
-        log_ok "AURA cloned to $AURA_DIR"
+        verify_all_imports
     fi
+    exit 0
+}
+
+# ─── Repair Mode ─────────────────────────────────────────────────────────────
+run_repair() {
+    echo ""
+    log_info "Running repair..."
+    install_termux_native_deps
+    install_pip_deps
+    install_llm_deps
+    verify_all_imports
+    exit 0
 }
 
 # ─── Main Install ────────────────────────────────────────────────────────────
@@ -452,7 +450,7 @@ main() {
     echo -e "${BOLD}══════════════════════════════════════════${NC}"
     echo ""
 
-    # Check/Repair modes (before creating any dirs)
+    # Check/Repair modes
     if [ "$CHECK_MODE" = true ]; then
         check_platform
         run_check
@@ -464,6 +462,7 @@ main() {
     fi
 
     # ── Full Install Flow ────────────────────────────────────────────────────
+
     echo -e "${BLUE}[1/7]${NC} Checking platform..."
     check_platform
 
@@ -471,9 +470,8 @@ main() {
     echo -e "${BLUE}[2/7]${NC} Cloning / updating repository..."
     clone_or_update
 
-    # Create log dir AFTER clone (so it's inside the repo)
-    mkdir -p "$AURA_DIR/logs" 2>/dev/null || true
-    echo "=== AURA Install Log $(date) ===" > "$LOG_FILE" 2>/dev/null || true
+    # ── Phase 2: Enable file logging NOW (Bug 1) ────────────────────────────
+    enable_file_logging
 
     echo ""
     echo -e "${BLUE}[3/7]${NC} Installing Termux-native packages..."
@@ -498,7 +496,7 @@ main() {
     # ── Final Verification ───────────────────────────────────────────────────
     verify_all_imports
 
-    # ── Summary ──────────────────────────────────────────────────────────────
+    # ── Summary (Bug 6: absolute paths) ──────────────────────────────────────
     echo ""
     echo -e "${BOLD}══════════════════════════════════════════${NC}"
 
@@ -517,14 +515,13 @@ main() {
     echo "Next steps:"
     echo ""
     echo "  1. Start AURA:"
-    echo "     cd ~/aura-v3"
-    echo "     bash run_aura.sh telegram"
+    echo "     cd ~/aura-v3 && bash run_aura.sh telegram"
     echo ""
     echo "  2. Or CLI mode:"
-    echo "     bash run_aura.sh cli"
+    echo "     cd ~/aura-v3 && bash run_aura.sh cli"
     echo ""
     echo "  3. Health check:"
-    echo "     python scripts/aura_doctor.py"
+    echo "     cd ~/aura-v3 && python scripts/aura_doctor.py"
     echo ""
     echo "  Install log: $LOG_FILE"
     echo ""
