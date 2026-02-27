@@ -1,0 +1,100 @@
+# AURA v3 — Termux Dependency Manifest
+# This file declares ALL dependencies with install strategy and tier.
+# The installer reads this manifest instead of hardcoding package lists.
+#
+# Tiers:
+#   core     — HARD FAIL if missing (AURA cannot start)
+#   enhanced — TRY HARD, WARN if fail (AURA works with reduced features)
+#   optional — NICE TO HAVE, mock/fallback mode (AURA fully functional)
+#
+# Install methods:
+#   pkg      — Termux pkg install (pre-built, fast, preferred)
+#   pip      — pip install (may need compilation)
+#   pkg+pip  — Try pkg first, pip --only-binary fallback
+
+# ─── System / Build Tools (installed via pkg) ─────────────────────────────
+system_packages:
+  - name: git
+    required: true
+  - name: python
+    required: true
+  - name: clang
+    required: false
+    note: "Needed for compiling native extensions"
+  - name: cmake
+    required: false
+    note: "Needed for llama-cpp-python compilation"
+  - name: ninja
+    required: false
+    note: "Faster builds for native extensions"
+  - name: build-essential
+    required: false
+  - name: libffi
+    required: false
+  - name: openssl
+    required: false
+
+# ─── Python Dependencies ─────────────────────────────────────────────────
+python_packages:
+
+  # ── TIER 1: CORE (AURA cannot start without these) ──
+  - name: aiofiles
+    import_name: aiofiles
+    tier: core
+    method: pip
+    version: ">=24.1.0"
+    feature: "Async file I/O for all data operations"
+
+  - name: pyyaml
+    import_name: yaml
+    tier: core
+    method: pip
+    version: ">=6.0.2"
+    feature: "Configuration file parsing"
+
+  - name: psutil
+    import_name: psutil
+    tier: core
+    method: pip
+    version: ">=6.1.0"
+    feature: "System monitoring, health checks"
+
+  - name: python-telegram-bot
+    import_name: telegram
+    tier: core
+    method: pip
+    version: ">=21.0"
+    feature: "Telegram bot interface (primary channel)"
+
+  # ── TIER 2: ENHANCED (AURA works without, features degraded) ──
+  - name: python-cryptography
+    import_name: cryptography
+    tier: enhanced
+    method: pkg+pip
+    pkg_name: python-cryptography
+    pip_name: cryptography
+    version: ">=42.0.0"
+    feature: "Session encryption, secure storage"
+    fallback: "Sessions stored unencrypted (still safe — all local)"
+
+  - name: python-numpy
+    import_name: numpy
+    tier: enhanced
+    method: pkg+pip
+    pkg_name: python-numpy
+    pip_name: numpy
+    version: ">=1.26.0"
+    feature: "Vector operations for memory/voice"
+    fallback: "Voice features limited, memory search basic"
+
+  # ── TIER 3: OPTIONAL (AURA fully functional, enhanced features missing) ──
+  - name: llama-cpp-python
+    import_name: llama_cpp
+    tier: optional
+    method: pip
+    version: ">=0.2.0"
+    feature: "Local LLM inference engine"
+    fallback: "Runs in mock LLM mode (pattern-based responses)"
+    compile_from_source: true
+    compile_timeout_minutes: 15
+    cmake_args: "-DLLAMA_METAL=off -DLLAMA_CUDA=off"

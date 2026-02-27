@@ -1,29 +1,11 @@
-# =============================================================================
-# AURA v3 Dependencies — Termux Edition
-# =============================================================================
-# For Termux (Android terminal), some packages MUST be installed via `pkg`
-# instead of `pip` because they need native compilation or Rust toolchain.
+# AURA v3 — Pinned Termux Requirements
+# Only pip-installable CORE dependencies are listed here.
+# Enhanced deps (cryptography, numpy) are installed via Termux pkg.
+# Optional deps (llama-cpp-python) are handled separately.
 #
-# BEFORE running pip install, run these Termux commands:
-#   pkg install -y python clang cmake build-essential
-#   pkg install -y python-cryptography  # pre-built binary, no Rust needed
-#
-# Then:
-#   pip install -r requirements-termux.txt
-# =============================================================================
+# To install: pip install -r requirements-termux.txt
 
-# Core (pip install — these compile fine on Termux with clang)
-aiofiles>=23.0.0          # Async file operations
-pyyaml>=6.0               # Configuration parsing
-psutil>=5.9.0             # System monitoring (builds from C source)
-
-# Telegram Bot
-python-telegram-bot>=20.0
-
-# NOTE: cryptography is installed via `pkg install python-cryptography`
-# Do NOT pip install cryptography on Termux unless you have Rust installed.
-# The termux_install.sh script handles this automatically.
-
-# Testing (optional)
-# pytest>=7.0.0
-# pytest-asyncio>=0.21.0
+aiofiles>=24.1.0
+PyYAML>=6.0.2
+psutil>=6.1.0
+python-telegram-bot>=21.0

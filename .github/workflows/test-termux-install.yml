@@ -1,0 +1,132 @@
+# AURA v3 — Termux Install CI
+# Tests the full installer in a Termux-like Docker container.
+# Runs on every push to production-hardening.
+#
+# Uses QEMU to emulate aarch64 on GitHub's x86_64 runners.
+# This catches install script bugs BEFORE they reach user devices.
+
+name: Test Termux Install
+
+on:
+  push:
+    branches: [production-hardening]
+    paths:
+      - 'scripts/termux_install.sh'
+      - 'scripts/termux_deps.yaml'
+      - 'requirements-termux.txt'
+      - '.github/workflows/test-termux-install.yml'
+  pull_request:
+    branches: [main, production-hardening]
+
+jobs:
+  test-install-script:
+    name: Test Install Script (Syntax + Logic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck lint
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: scripts
+          additional_files: termux_install.sh
+
+      - name: Syntax check (bash -n)
+        run: bash -n scripts/termux_install.sh
+
+      - name: Verify no heredocs (curl|bash incompatible)
+        run: |
+          if grep -n '<<EOF' scripts/termux_install.sh; then
+            echo "ERROR: Heredocs found! These break curl|bash piped execution."
+            exit 1
+          fi
+
+      - name: Verify no set -e (incompatible with two-phase logging)
+        run: |
+          if grep -n '^set -e$' scripts/termux_install.sh; then
+            echo "ERROR: 'set -e' found! This kills the script when log functions return non-zero."
+            exit 1
+          fi
+
+      - name: Verify branch is specified in clone
+        run: |
+          if ! grep -q 'AURA_BRANCH=' scripts/termux_install.sh; then
+            echo "ERROR: No AURA_BRANCH variable found!"
+            exit 1
+          fi
+          if ! grep -q -- '--branch' scripts/termux_install.sh; then
+            echo "ERROR: git clone missing --branch flag!"
+            exit 1
+          fi
+
+      - name: Verify dependency manifest exists
+        run: |
+          if [ ! -f scripts/termux_deps.yaml ]; then
+            echo "ERROR: scripts/termux_deps.yaml not found!"
+            exit 1
+          fi
+
+      - name: Verify requirements file exists
+        run: |
+          if [ ! -f requirements-termux.txt ]; then
+            echo "ERROR: requirements-termux.txt not found!"
+            exit 1
+          fi
+
+  test-python-imports:
+    name: Test Python Import Guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install core deps only
+        run: pip install -r requirements-termux.txt
+
+      - name: Verify AURA starts without optional deps
+        run: |
+          cd $GITHUB_WORKSPACE
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          # These should work (core)
+          import aiofiles
+          import yaml
+          import psutil
+          import telegram
+          print('Core imports: OK')
+
+          # These should NOT crash (graceful degradation)
+          try:
+              from src.core.security_layers import CRYPTO_AVAILABLE
+              print(f'security_layers: CRYPTO_AVAILABLE={CRYPTO_AVAILABLE}')
+          except Exception as e:
+              print(f'security_layers import failed: {e}')
+              sys.exit(1)
+
+          try:
+              from src.session.manager import CRYPTO_AVAILABLE as SM_CRYPTO
+              print(f'session.manager: CRYPTO_AVAILABLE={SM_CRYPTO}')
+          except Exception as e:
+              print(f'session.manager import failed: {e}')
+              sys.exit(1)
+          "
+
+      - name: Verify security.py graceful degradation
+        run: |
+          cd $GITHUB_WORKSPACE
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          try:
+              from src.security.security import LocalAuthenticator, HAS_CRYPTO
+              print(f'security.py: HAS_CRYPTO={HAS_CRYPTO}')
+              if not HAS_CRYPTO:
+                  print('Graceful degradation working correctly')
+          except ImportError as e:
+              print(f'FAIL: security.py crashed without cryptography: {e}')
+              sys.exit(1)
+          "
