@@ -100,8 +100,9 @@ install_system_deps() {
     case $platform in
         termux)
             log "Installing dependencies for Termux..."
-            pkg update -y
-            pkg install -y git python python-dev clang make ffmpeg
+            pkg update -y -o Dpkg::Options::="--force-confnew" 2>/dev/null || true
+            pkg upgrade -y -o Dpkg::Options::="--force-confnew" 2>/dev/null || true
+            pkg install -y python python-dev clang make ffmpeg
             ;;
         linux)
             log "Installing dependencies for Linux..."
