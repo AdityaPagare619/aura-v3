@@ -308,13 +308,15 @@ setup_env() {
         log_warn ".env exists but TELEGRAM_TOKEN is empty"
     fi
 
-    # Interactive token setup
+    # Interactive token setup - must use /dev/tty because script is piped via curl
     echo ""
     echo -e "${BOLD}Telegram Bot Token Setup${NC}"
     echo "Get your token from @BotFather on Telegram."
     echo ""
     echo -n "Paste your bot token (or press Enter to skip): "
-    read -r TOKEN
+    
+    # Read from terminal directly, handling the curl | bash pipe
+    read -r TOKEN </dev/tty || true
 
     if [ -n "$TOKEN" ]; then
         # Create .env from example or from scratch
@@ -465,6 +467,9 @@ main() {
 
     echo -e "${BOLD}══════════════════════════════════════════${NC}"
     echo ""
+    echo -e "${YELLOW}IMPORTANT: Termux limits background tasks. To keep AURA alive, run:${NC}"
+    echo -e "  termux-wake-lock"
+    echo ""
     echo "Next steps:"
     echo ""
     echo "  1. Start AURA:"
@@ -476,12 +481,6 @@ main() {
     echo ""
     echo "  3. Health check:"
     echo "     python scripts/aura_doctor.py"
-    echo ""
-    echo "  4. Status check:"
-    echo "     bash scripts/termux_install.sh --check"
-    echo ""
-    echo "  5. Repair missing deps:"
-    echo "     bash scripts/termux_install.sh --repair"
     echo ""
     echo "  Install log: $LOG_FILE"
     echo ""
