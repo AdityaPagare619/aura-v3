@@ -41,8 +41,10 @@ echo -e "${BLUE}[INFO]${NC} Detected Termux environment"
 # -----------------------------------------------------------------------------
 echo ""
 echo -e "${BLUE}[1/6]${NC} Updating packages..."
-pkg update -y 2>/dev/null || true
-pkg upgrade -y 2>/dev/null || true
+# Using -o Dpkg::Options::="--force-confnew" to automatically handle config file prompts
+# Using -y to automatically answer yes to all prompts
+pkg update -y -o Dpkg::Options::="--force-confnew" 2>/dev/null || true
+pkg upgrade -y -o Dpkg::Options::="--force-confnew" 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
 # Install required packages
