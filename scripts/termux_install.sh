@@ -1,13 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # =============================================================================
-# AURA v3 — Termux Production Installer (v2.2 — curl|bash safe)
+# AURA v3 — Termux Production Installer (v2.3)
 #
-# DESIGN: No set -e, no set -o pipefail, no heredocs.
-# These all cause issues when piped via curl | bash.
-# Exit codes are checked explicitly where needed.
+# curl|bash safe: No set -e, no set -o pipefail, no heredocs.
 # =============================================================================
 
-# ─── Establish known CWD (user may have rm -rf'd it) ─────────────────────────
 cd "$HOME" 2>/dev/null || cd /data/data/com.termux/files/home 2>/dev/null || true
 
 # ─── Colors ──────────────────────────────────────────────────────────────────
@@ -25,21 +22,7 @@ LOG_FILE=""
 ERRORS_FOUND=0
 PYTHON_CMD=""
 
-# ─── Parse arguments ─────────────────────────────────────────────────────────
-REPAIR_MODE=false
-CHECK_MODE=false
-VERBOSE=false
-
-while [ $# -gt 0 ]; do
-    case $1 in
-        --repair)  REPAIR_MODE=true; shift ;;
-        --check)   CHECK_MODE=true; shift ;;
-        --verbose) VERBOSE=true; shift ;;
-        *)         echo -e "${RED}Unknown option: $1${NC}"; exit 1 ;;
-    esac
-done
-
-# ─── Logging (two-phase: stdout only before clone, file after) ───────────────
+# ─── Logging ─────────────────────────────────────────────────────────────────
 log_info() {
     echo -e "${BLUE}[INFO]${NC}  $1"
     if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
@@ -47,7 +30,6 @@ log_info() {
     fi
     return 0
 }
-
 log_ok() {
     echo -e "${GREEN}[OK]${NC}    $1"
     if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
@@ -55,7 +37,6 @@ log_ok() {
     fi
     return 0
 }
-
 log_warn() {
     echo -e "${YELLOW}[WARN]${NC}  $1"
     if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
@@ -63,7 +44,6 @@ log_warn() {
     fi
     return 0
 }
-
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
     if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
@@ -150,42 +130,74 @@ install_termux_native_deps() {
         if command -v "$pkg_name" > /dev/null 2>&1; then
             log_ok "$pkg_name already installed"
         else
-            pkg install -y "$pkg_name" 2>/dev/null && log_ok "$pkg_name installed" || log_error "Failed to install $pkg_name"
+            pkg install -y "$pkg_name" 2>/dev/null && log_ok "$pkg_name installed" || log_error "Failed: $pkg_name"
         fi
     done
 
     pkg install -y build-essential libffi openssl 2>/dev/null || true
 
-    # cryptography
+    # ── cryptography: pkg first, then --only-binary (NEVER compile from source) ──
     if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
         log_ok "cryptography already importable"
     else
         log_info "Installing cryptography via Termux pkg..."
         pkg install -y python-cryptography 2>/dev/null || true
+
+        # Try to fix pkg/pip site-packages isolation by adding Termux's site-packages
+        # to Python's search path via .pth file
+        local termux_site="$PREFIX/lib/python${PYTHON_MAJOR}.${PYTHON_MINOR}/site-packages"
+        local pip_site="$($PYTHON_CMD -c 'import site; print(site.getusersitepackages())' 2>/dev/null)"
+
         if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
             log_ok "cryptography installed and verified"
         else
-            log_warn "Trying cryptography via pip..."
-            pip install cryptography 2>/dev/null || true
+            # Try adding Termux system path to Python
+            if [ -d "$termux_site" ]; then
+                log_info "Trying to link Termux pkg path to pip Python..."
+                $PYTHON_CMD -c "
+import site, os
+sp = site.getsitepackages()
+for p in sp:
+    if os.path.isdir(p):
+        pth = os.path.join(p, 'termux-pkgs.pth')
+        with open(pth, 'w') as f:
+            f.write('$termux_site\n')
+        break
+" 2>/dev/null || true
+            fi
+
             if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
-                log_ok "cryptography via pip verified"
+                log_ok "cryptography linked and verified"
             else
-                log_error "cryptography import FAILED"
+                # NEVER compile from source — use --only-binary to fail fast
+                log_warn "pkg path fix didn't work. Trying pip (pre-built only, no compile)..."
+                pip install cryptography --only-binary :all: 2>/dev/null || true
+
+                if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
+                    log_ok "cryptography via pip wheel verified"
+                else
+                    log_warn "cryptography unavailable (session encryption degraded, AURA still works)"
+                fi
             fi
         fi
     fi
 
-    # numpy
+    # ── numpy: same approach ──
     if $PYTHON_CMD -c "import numpy" 2>/dev/null; then
         log_ok "numpy already importable"
     else
         log_info "Installing numpy via Termux pkg..."
         pkg install -y python-numpy 2>/dev/null || true
+
         if $PYTHON_CMD -c "import numpy" 2>/dev/null; then
             log_ok "numpy installed and verified"
         else
-            log_warn "Trying numpy via pip..."
-            pip install numpy 2>/dev/null || log_error "numpy install failed"
+            pip install numpy --only-binary :all: 2>/dev/null || true
+            if $PYTHON_CMD -c "import numpy" 2>/dev/null; then
+                log_ok "numpy via pip wheel verified"
+            else
+                log_warn "numpy unavailable (some features may be limited)"
+            fi
         fi
     fi
     return 0
@@ -229,7 +241,7 @@ install_llm_deps() {
         return 0
     fi
 
-    log_info "Attempting llama-cpp-python install (may take minutes)..."
+    log_info "Trying pre-built llama-cpp-python..."
     export CMAKE_ARGS="-DLLAMA_METAL=off -DLLAMA_CUDA=off"
 
     pip install llama-cpp-python --only-binary :all: 2>/dev/null || true
@@ -238,13 +250,12 @@ install_llm_deps() {
         return 0
     fi
 
-    log_warn "No pre-built wheel. Compiling from source..."
+    log_warn "No pre-built wheel. Attempting source build (may take 5-10 min)..."
     pip install llama-cpp-python --no-cache-dir 2>/dev/null || true
     if $PYTHON_CMD -c "import llama_cpp" 2>/dev/null; then
         log_ok "llama-cpp-python compiled and installed"
     else
         log_warn "llama-cpp-python failed (AURA will use mock LLM mode)"
-        log_warn "Install manually later: pip install llama-cpp-python --no-cache-dir"
     fi
     return 0
 }
@@ -256,22 +267,31 @@ verify_all_imports() {
 
     local ALL_PASS=true
 
-    for pkg_import in "aiofiles:aiofiles" "yaml:pyyaml" "cryptography:cryptography" "psutil:psutil" "telegram:python-telegram-bot" "numpy:python-numpy" "llama_cpp:llama-cpp-python"; do
+    for pkg_import in "aiofiles:aiofiles" "yaml:pyyaml" "psutil:psutil" "telegram:python-telegram-bot"; do
         local import_name="${pkg_import%%:*}"
         local pkg_name="${pkg_import##*:}"
 
         if $PYTHON_CMD -c "import $import_name" 2>/dev/null; then
             log_ok "$import_name ✓"
         else
-            if [ "$import_name" = "llama_cpp" ]; then
-                log_warn "$import_name ✗ (LLM mock mode)"
-            else
-                log_error "$import_name ✗ → pip install $pkg_name"
-                ALL_PASS=false
-            fi
+            log_error "$import_name ✗ → pip install $pkg_name"
+            ALL_PASS=false
         fi
     done
 
+    # Optional deps — warn only, don't fail
+    for pkg_import in "cryptography:cryptography" "numpy:numpy" "llama_cpp:llama-cpp-python"; do
+        local import_name="${pkg_import%%:*}"
+        local pkg_name="${pkg_import##*:}"
+
+        if $PYTHON_CMD -c "import $import_name" 2>/dev/null; then
+            log_ok "$import_name ✓"
+        else
+            log_warn "$import_name ✗ (optional — AURA works without it)"
+        fi
+    done
+
+    # Test AURA module import
     if [ -d "$AURA_DIR/src" ]; then
         cd "$AURA_DIR"
         if $PYTHON_CMD -c "import sys; sys.path.insert(0, '.'); from src.main import AuraProduction; print('OK')" 2>/dev/null; then
@@ -287,7 +307,7 @@ verify_all_imports() {
     return 0
 }
 
-# ─── Setup .env (NO heredocs — curl|bash incompatible) ───────────────────────
+# ─── Setup .env ──────────────────────────────────────────────────────────────
 setup_env() {
     log_info "Setting up configuration..."
     cd "$AURA_DIR"
@@ -305,14 +325,12 @@ setup_env() {
     echo "Get your token from @BotFather on Telegram."
     echo ""
     echo -n "Paste your bot token (or press Enter to skip): "
-
     read -r TOKEN </dev/tty || TOKEN=""
 
     if [ -n "$TOKEN" ]; then
         if [ -f ".env.example" ]; then
             cp .env.example .env
         fi
-
         if [ -f ".env" ]; then
             if grep -q "^TELEGRAM_TOKEN=" ".env"; then
                 sed -i "s|^TELEGRAM_TOKEN=.*|TELEGRAM_TOKEN=$TOKEN|" .env
@@ -369,7 +387,6 @@ main() {
     echo ""
     echo -e "${BLUE}[2/7]${NC} Cloning / updating repository..."
     clone_or_update
-
     enable_file_logging
 
     echo ""
@@ -399,13 +416,10 @@ main() {
     if [ "$ERRORS_FOUND" -eq 0 ]; then
         echo -e "${GREEN}${BOLD}   Installation Complete!${NC}"
     else
-        echo -e "${YELLOW}${BOLD}   Installation Complete with $ERRORS_FOUND error(s)${NC}"
+        echo -e "${YELLOW}${BOLD}   Complete with $ERRORS_FOUND error(s)${NC}"
         echo -e "   Check: $LOG_FILE"
     fi
     echo -e "${BOLD}══════════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${YELLOW}IMPORTANT: To keep AURA alive in background:${NC}"
-    echo -e "  termux-wake-lock"
     echo ""
     echo "Next steps:"
     echo "  cd ~/aura-v3 && bash run_aura.sh telegram"
