@@ -116,9 +116,8 @@ class EspeakTTS(BaseTTS):
         ]
 
     def is_available(self) -> bool:
-        return os.path.exists("/usr/bin/espeak-ng") or os.path.exists(
-            "/data/data/com.termux/files/usr/bin/espeak-ng"
-        )
+        import shutil
+        return shutil.which("espeak-ng") is not None or shutil.which("espeak") is not None
 
 
 class Pyttsx3TTS(BaseTTS):
