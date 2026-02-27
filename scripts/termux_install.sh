@@ -125,7 +125,7 @@ run_check() {
     # Dependencies
     echo ""
     echo "Python dependencies:"
-    for pkg in aiofiles yaml cryptography psutil telegram; do
+    for pkg in aiofiles yaml cryptography psutil telegram numpy llama_cpp; do
         if $PYTHON_CMD -c "import $pkg" 2>/dev/null; then
             echo -e "  ${GREEN}✓${NC} $pkg"
         else
@@ -135,8 +135,8 @@ run_check() {
 
     echo ""
     echo "Termux packages:"
-    for pkg in git python clang cmake; do
-        if command -v $pkg &>/dev/null; then
+    for pkg in git python clang cmake python-numpy; do
+        if command -v $pkg &>/dev/null || dpkg -s $pkg &>/dev/null; then
             echo -e "  ${GREEN}✓${NC} $pkg"
         else
             echo -e "  ${RED}✗${NC} $pkg (run: pkg install $pkg)"
@@ -160,6 +160,7 @@ run_repair() {
 
     install_termux_native_deps
     install_pip_deps
+    install_llm_deps
     verify_all_imports
 
     echo ""
@@ -181,7 +182,7 @@ install_termux_native_deps() {
     pkg upgrade -y -o Dpkg::Options::="--force-confnew" || log_warn "pkg upgrade had warnings (continuing)"
 
     # Core packages: git, python, build tools
-    local CORE_PKGS="git python clang cmake"
+    local CORE_PKGS="git python clang cmake ninja"
     for pkg_name in $CORE_PKGS; do
         if command -v "$pkg_name" &>/dev/null; then
             log_ok "$pkg_name already installed"
@@ -215,7 +216,20 @@ install_termux_native_deps() {
         fi
     fi
 
-    # Build deps for psutil
+    # CRITICAL: Numpy via pkg (compiling via pip takes forever on mobile)
+    if $PYTHON_CMD -c "import numpy" 2>/dev/null; then
+        log_ok "numpy already installed"
+    else
+        log_info "Installing numpy via Termux pkg (pre-built)..."
+        if pkg install -y python-numpy 2>/dev/null; then
+            log_ok "numpy installed via pkg"
+        else
+            log_warn "python-numpy not in pkg, trying pip..."
+            pip install numpy || log_error "Failed to install numpy"
+        fi
+    fi
+
+    # Build deps for psutil & LLM
     pkg install -y build-essential libffi openssl 2>/dev/null || true
 }
 
@@ -259,6 +273,35 @@ install_pip_deps() {
     done
 }
 
+# ─── Install LLM Dependencies ────────────────────────────────────────────────
+install_llm_deps() {
+    echo ""
+    log_info "Installing Local LLM Engine (llama-cpp-python)..."
+    
+    if $PYTHON_CMD -c "import llama_cpp" 2>/dev/null; then
+        log_ok "llama-cpp-python already installed"
+        return
+    fi
+    
+    log_info "Building llama-cpp-python for Termux (this might take a few minutes)..."
+    
+    # We must set CMAKE_ARGS to avoid Android NDK missing headers errors if compiling from source
+    export CMAKE_ARGS="-DLLAMA_METAL=off -DLLAMA_CUDA=off"
+    
+    # Prefer pre-built binary if available, otherwise compile
+    if pip install llama-cpp-python --only-binary :all: 2>&1 | tee -a "$LOG_FILE"; then
+         log_ok "llama-cpp-python (pre-built) installed"
+    else
+         log_warn "Pre-built binary failed, compiling from source..."
+         if pip install llama-cpp-python --no-cache-dir 2>&1 | tee -a "$LOG_FILE"; then
+             log_ok "llama-cpp-python compiled and installed"
+         else
+             log_error "llama-cpp-python installation FAILED."
+             log_warn "AURA will still run, but in MOCK LLM mode."
+         fi
+    fi
+}
+
 # ─── Verify All Imports ──────────────────────────────────────────────────────
 verify_all_imports() {
     echo ""
@@ -266,15 +309,19 @@ verify_all_imports() {
 
     local ALL_PASS=true
 
-    for pkg_import in "aiofiles:aiofiles" "yaml:pyyaml" "cryptography:cryptography" "psutil:psutil" "telegram:python-telegram-bot"; do
+    for pkg_import in "aiofiles:aiofiles" "yaml:pyyaml" "cryptography:cryptography" "psutil:psutil" "telegram:python-telegram-bot" "numpy:python-numpy" "llama_cpp:llama-cpp-python"; do
         local import_name="${pkg_import%%:*}"
         local pkg_name="${pkg_import##*:}"
 
         if $PYTHON_CMD -c "import $import_name" 2>/dev/null; then
             log_ok "$import_name ✓"
         else
-            log_error "$import_name ✗ → pip install $pkg_name"
-            ALL_PASS=false
+            if [ "$import_name" = "llama_cpp" ]; then
+                log_warn "$import_name ✗ (LLM will run in mock mode)"
+            else
+                log_error "$import_name ✗ → pip install $pkg_name"
+                ALL_PASS=false
+            fi
         fi
     done
 
@@ -342,6 +389,7 @@ setup_env() {
             echo "TELEGRAM_TOKEN=$TOKEN" > .env
             echo "TELEGRAM_BOT_TOKEN=$TOKEN" >> .env
             echo "AURA_ENV=production" >> .env
+            echo "AURA_MOCK_LLM=false" >> .env
         fi
 
         log_ok "Token saved to .env"
@@ -353,6 +401,7 @@ setup_env() {
             else
                 echo "TELEGRAM_TOKEN=" > .env
                 echo "AURA_ENV=production" >> .env
+                echo "AURA_MOCK_LLM=false" >> .env
             fi
         fi
         log_warn "No token entered — set it later: nano ~/aura-v3/.env"
@@ -415,11 +464,11 @@ main() {
     fi
 
     # ── Full Install Flow ────────────────────────────────────────────────────
-    echo -e "${BLUE}[1/6]${NC} Checking platform..."
+    echo -e "${BLUE}[1/7]${NC} Checking platform..."
     check_platform
 
     echo ""
-    echo -e "${BLUE}[2/6]${NC} Cloning / updating repository..."
+    echo -e "${BLUE}[2/7]${NC} Cloning / updating repository..."
     clone_or_update
 
     # Create log dir AFTER clone (so it's inside the repo)
@@ -427,32 +476,27 @@ main() {
     echo "=== AURA Install Log $(date) ===" > "$LOG_FILE" 2>/dev/null || true
 
     echo ""
-    echo -e "${BLUE}[3/6]${NC} Installing Termux-native packages..."
+    echo -e "${BLUE}[3/7]${NC} Installing Termux-native packages..."
     install_termux_native_deps
 
     echo ""
-    echo -e "${BLUE}[4/6]${NC} Installing Python dependencies..."
+    echo -e "${BLUE}[4/7]${NC} Installing Python dependencies..."
     install_pip_deps
 
     echo ""
-    echo -e "${BLUE}[5/6]${NC} Creating directories..."
+    echo -e "${BLUE}[5/7]${NC} Installing Local LLM Engine..."
+    install_llm_deps
+
+    echo ""
+    echo -e "${BLUE}[6/7]${NC} Creating directories..."
     create_dirs
 
     echo ""
-    echo -e "${BLUE}[6/6]${NC} Configuring environment..."
+    echo -e "${BLUE}[7/7]${NC} Configuring environment..."
     setup_env
 
     # ── Final Verification ───────────────────────────────────────────────────
     verify_all_imports
-
-    # ── LLM (optional) ───────────────────────────────────────────────────────
-    echo ""
-    log_info "LLM support (optional)..."
-    if $PYTHON_CMD -m pip install llama-cpp-python --only-binary :all: --quiet 2>/dev/null; then
-        log_ok "LLM support installed (pre-built)"
-    else
-        log_warn "LLM not installed — AURA will use MOCK mode (install later: pip install llama-cpp-python)"
-    fi
 
     # ── Summary ──────────────────────────────────────────────────────────────
     echo ""
