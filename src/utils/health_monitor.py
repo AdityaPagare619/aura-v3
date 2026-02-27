@@ -104,7 +104,7 @@ class HealthMonitor:
         logger.info(f"Registered custom health check for {component.value}")
 
     def register_recovery_action(
-        self, component: ComponentType, action_func: Callable[[], asyncio.coroutine]
+        self, component: ComponentType, action_func: Callable[[], Any]
     ):
         """Register an automatic recovery action for a component"""
         self._recovery_actions[component] = action_func

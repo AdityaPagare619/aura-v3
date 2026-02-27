@@ -70,7 +70,7 @@ class LearningEngine:
 
     async def initialize(self):
         if not self._initialized:
-            await asyncio.get_event_loop().run_in_executor(None, self.load_patterns)
+            await asyncio.get_running_loop().run_in_executor(None, self.load_patterns)
             self._initialized = True
 
     async def start(self):
@@ -187,7 +187,7 @@ class LearningEngine:
                 contact_rec.preferred_times.get(time_key, 0) + 1
             )
 
-        await asyncio.get_event_loop().run_in_executor(None, self.save_patterns)
+        await asyncio.get_running_loop().run_in_executor(None, self.save_patterns)
 
     def learn_intent_pattern(
         self,

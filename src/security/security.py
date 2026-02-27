@@ -18,12 +18,27 @@ from enum import Enum
 from datetime import datetime, timedelta
 import secrets
 import base64
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.backends import default_backend
+
+# Graceful degradation: cryptography is ENHANCED tier (not required)
+# AURA works without it — encryption features degrade to no-op
+try:
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.backends import default_backend
+    HAS_CRYPTO = True
+except ImportError:
+    HAS_CRYPTO = False
+    Fernet = None
 
 logger = logging.getLogger(__name__)
+
+if not HAS_CRYPTO:
+    logger.warning(
+        "cryptography package not available. "
+        "PIN/password encryption disabled. "
+        "Install via: pkg install python-cryptography"
+    )
 
 
 class SecurityLevel(Enum):
@@ -73,7 +88,7 @@ class LocalAuthenticator:
 
         # Encryption key (derived from user password/pin)
         self._encryption_key: Optional[bytes] = None
-        self._fernet: Optional[Fernet] = None
+        self._fernet = None
 
         os.makedirs(storage_path, exist_ok=True)
         self._load_config()
@@ -136,9 +151,12 @@ class LocalAuthenticator:
                     f,
                 )
 
-            # Derive encryption key from PIN
-            self._encryption_key = self._derive_key(pin, salt)
-            self._fernet = Fernet(self._encryption_key)
+            # Derive encryption key from PIN (only if cryptography available)
+            if HAS_CRYPTO:
+                self._encryption_key = self._derive_key(pin, salt)
+                self._fernet = Fernet(self._encryption_key)
+            else:
+                logger.warning("Encryption disabled (no cryptography package)")
 
             logger.info("PIN setup complete")
             return True
@@ -166,8 +184,9 @@ class LocalAuthenticator:
 
             if hmac.compare_digest(stored_hash, input_hash):
                 # Success - derive encryption key
-                self._encryption_key = self._derive_key(pin, salt)
-                self._fernet = Fernet(self._encryption_key)
+                if HAS_CRYPTO:
+                    self._encryption_key = self._derive_key(pin, salt)
+                    self._fernet = Fernet(self._encryption_key)
 
                 self._failed_attempts = []  # Reset failed attempts
                 logger.info("PIN verification successful")
@@ -198,8 +217,9 @@ class LocalAuthenticator:
                 )
 
             # Derive encryption key
-            self._encryption_key = self._derive_key(password, salt)
-            self._fernet = Fernet(self._encryption_key)
+            if HAS_CRYPTO:
+                self._encryption_key = self._derive_key(password, salt)
+                self._fernet = Fernet(self._encryption_key)
 
             logger.info("Password setup complete")
             return True
@@ -226,8 +246,9 @@ class LocalAuthenticator:
             input_hash = self._hash_input(password, salt)
 
             if hmac.compare_digest(stored_hash, input_hash):
-                self._encryption_key = self._derive_key(password, salt)
-                self._fernet = Fernet(self._encryption_key)
+                if HAS_CRYPTO:
+                    self._encryption_key = self._derive_key(password, salt)
+                    self._fernet = Fernet(self._encryption_key)
                 self._failed_attempts = []
                 return True
             else:
@@ -248,7 +269,9 @@ class LocalAuthenticator:
         )
 
     def _derive_key(self, input_str: str, salt: bytes) -> bytes:
-        """Derive encryption key from input"""
+        """Derive encryption key from input (requires cryptography)"""
+        if not HAS_CRYPTO:
+            return b""
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -309,8 +332,10 @@ class LocalAuthenticator:
             del self._authenticated_sessions[session_id]
 
     def encrypt(self, data: str) -> Optional[str]:
-        """Encrypt data"""
+        """Encrypt data (returns plaintext if cryptography unavailable)"""
         if not self._fernet:
+            if not HAS_CRYPTO:
+                return data  # Graceful degradation: return unencrypted
             logger.warning("No encryption key, cannot encrypt")
             return None
         try:
@@ -320,8 +345,10 @@ class LocalAuthenticator:
             return None
 
     def decrypt(self, encrypted_data: str) -> Optional[str]:
-        """Decrypt data"""
+        """Decrypt data (returns as-is if cryptography unavailable)"""
         if not self._fernet:
+            if not HAS_CRYPTO:
+                return encrypted_data  # Graceful degradation
             logger.warning("No encryption key, cannot decrypt")
             return None
         try:

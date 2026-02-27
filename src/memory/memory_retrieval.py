@@ -205,7 +205,7 @@ class UnifiedMemoryRetrieval:
             return []
 
         # Run in executor to avoid blocking
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         traces = await loop.run_in_executor(
             None,
             lambda: self.episodic.retrieve(query.embedding or [], top_k=query.limit),
@@ -233,7 +233,7 @@ class UnifiedMemoryRetrieval:
         if not self.semantic:
             return []
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         knowledge = await loop.run_in_executor(
             None, lambda: self.semantic.retrieve(query.query, limit=query.limit)
         )
@@ -290,7 +290,7 @@ class UnifiedMemoryRetrieval:
         if not self.ancestor:
             return []
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         memories = await loop.run_in_executor(
             None,
             lambda: self.ancestor.search(

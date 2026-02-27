@@ -27,6 +27,7 @@ DEPRECATION NOTICE:
 """
 
 import asyncio
+from datetime import datetime
 import json
 import logging
 import os
@@ -320,7 +321,7 @@ class VoicePipeline:
         log_file = Path(self.config.cache_dir) / "voice_interactions.jsonl"
 
         entry = {
-            "timestamp": asyncio.get_event_loop().time(),
+            "timestamp": datetime.now().isoformat(),
             "input": input_text,
             "output": response,
         }

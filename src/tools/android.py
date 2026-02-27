@@ -18,6 +18,7 @@ ACTIVE classes (still used):
 """
 
 import asyncio
+from datetime import datetime
 import json
 import logging
 import subprocess
@@ -374,7 +375,7 @@ class AndroidTools:
         structure = {
             "screen_size": self.screen_size,
             "elements": {},
-            "last_explored": str(asyncio.get_event_loop().time()),
+            "last_explored": datetime.now().isoformat(),
         }
 
         self.memory.save_app_structure("current_app", structure)

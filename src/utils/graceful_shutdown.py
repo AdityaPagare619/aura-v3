@@ -100,9 +100,10 @@ class GracefulShutdown:
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
         logger.info(f"Received signal {signum}, initiating graceful shutdown")
-        if asyncio.get_event_loop().is_running():
-            asyncio.create_task(self.shutdown())
-        else:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.shutdown())
+        except RuntimeError:
             asyncio.run(self.shutdown())
 
     async def shutdown(self, reason: str = "unknown"):
