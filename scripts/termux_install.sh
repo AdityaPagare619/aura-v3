@@ -1,22 +1,23 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # =============================================================================
-# AURA v3 — Termux Production Installer (Rewrite v2)
+# AURA v3 — Termux Production Installer (Rewrite v2.1)
 #
 # Fixes addressed:
 #   Bug 1: Two-phase logging (stdout before clone, file after)
 #   Bug 2: Clone with --branch production-hardening
 #   Bug 3: cd "$HOME" as first action
-#   Bug 4: set -o pipefail + proper exit code capture
+#   Bug 4: pipefail + proper exit code capture (no set -e, manual checks)
 #   Bug 5: Post-install import verification for every package
 #   Bug 6: Absolute paths in "Next Steps"
 #   Bug 7: No silent error suppression on critical paths
 # =============================================================================
-set -e
+
+# NOTE: We intentionally do NOT use `set -e` because our two-phase logging
+# functions return non-zero when LOG_FILE is empty (before clone).
+# Instead, we check exit codes explicitly where it matters.
 set -o pipefail
 
 # ─── CRITICAL: Establish known CWD immediately (Bug 3) ───────────────────────
-# User may run `rm -rf ~/aura-v3` while CWD IS ~/aura-v3, which
-# invalidates the shell's CWD.  Fix: unconditionally cd home first.
 cd "$HOME" || { echo "FATAL: Cannot cd to \$HOME"; exit 1; }
 
 # ─── Colors ──────────────────────────────────────────────────────────────────
@@ -47,24 +48,33 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ─── Two-Phase Logging (Bug 1 + Bug 7) ──────────────────────────────────────
-# Phase 1: Before clone — stdout only, no file logging
+# ─── Two-Phase Logging (Bug 1) ──────────────────────────────────────────────
+# Phase 1: Before clone — stdout only, no file
 # Phase 2: After clone — stdout + file
-log_info()  {
+# Uses if/then instead of && to avoid non-zero exit codes with set -e
+log_info() {
     echo -e "${BLUE}[INFO]${NC}  $1"
-    [ -n "$LOG_FILE" ] && echo "[INFO]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+    if [ -n "$LOG_FILE" ]; then
+        echo "[INFO]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+    fi
 }
-log_ok()    {
+log_ok() {
     echo -e "${GREEN}[OK]${NC}    $1"
-    [ -n "$LOG_FILE" ] && echo "[OK]    $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+    if [ -n "$LOG_FILE" ]; then
+        echo "[OK]    $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+    fi
 }
-log_warn()  {
+log_warn() {
     echo -e "${YELLOW}[WARN]${NC}  $1"
-    [ -n "$LOG_FILE" ] && echo "[WARN]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+    if [ -n "$LOG_FILE" ]; then
+        echo "[WARN]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+    fi
 }
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
-    [ -n "$LOG_FILE" ] && echo "[ERROR] $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+    if [ -n "$LOG_FILE" ]; then
+        echo "[ERROR] $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null
+    fi
     ERRORS_FOUND=$((ERRORS_FOUND + 1))
 }
 
@@ -73,7 +83,7 @@ enable_file_logging() {
     mkdir -p "$AURA_DIR/logs"
     LOG_FILE="$AURA_DIR/logs/install.log"
     echo "=== AURA Install Log $(date) ===" > "$LOG_FILE"
-    log_info "File logging enabled at $LOG_FILE"
+    log_info "File logging enabled"
 }
 
 # ─── Platform Check ──────────────────────────────────────────────────────────
@@ -95,7 +105,9 @@ check_platform() {
         exit 1
     fi
 
-    PYTHON_VERSION=$($PYTHON_CMD --version 2>&1 | awk '{print $2}')
+    local py_ver
+    py_ver=$($PYTHON_CMD --version 2>&1)
+    PYTHON_VERSION=$(echo "$py_ver" | awk '{print $2}')
     PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
     PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
 
@@ -113,27 +125,25 @@ clone_or_update() {
     echo ""
     log_info "Getting AURA v3..."
 
-    # Ensure we're in $HOME (not a deleted directory)
     cd "$HOME"
 
     if [ -d "$AURA_DIR/.git" ]; then
-        # Existing repo — update it
         log_info "Updating existing installation..."
         cd "$AURA_DIR"
 
-        # Make sure we're on the right branch
         local current_branch
         current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
         if [ "$current_branch" != "$AURA_BRANCH" ]; then
             log_info "Switching from '$current_branch' to '$AURA_BRANCH'..."
             git fetch origin "$AURA_BRANCH" || log_warn "Fetch failed"
-            git checkout "$AURA_BRANCH" || git checkout -b "$AURA_BRANCH" "origin/$AURA_BRANCH" || log_warn "Branch checkout failed"
+            git checkout "$AURA_BRANCH" 2>/dev/null || \
+                git checkout -b "$AURA_BRANCH" "origin/$AURA_BRANCH" 2>/dev/null || \
+                log_warn "Branch checkout failed"
         fi
 
         git pull origin "$AURA_BRANCH" || log_warn "Could not update (using existing version)"
-        log_ok "AURA updated on branch '$AURA_BRANCH'"
+        log_ok "AURA updated (branch: $AURA_BRANCH)"
     elif [ -d "$AURA_DIR" ]; then
-        # Directory exists but no .git — leftover from partial install
         log_warn "Found leftover $AURA_DIR without .git — cleaning up..."
         rm -rf "$AURA_DIR"
         git clone --branch "$AURA_BRANCH" --single-branch \
@@ -141,7 +151,6 @@ clone_or_update() {
         cd "$AURA_DIR"
         log_ok "AURA cloned fresh (branch: $AURA_BRANCH)"
     else
-        # Fresh install
         log_info "Cloning AURA v3 (branch: $AURA_BRANCH)..."
         git clone --branch "$AURA_BRANCH" --single-branch \
             https://github.com/AdityaPagare619/aura-v3.git "$AURA_DIR"
@@ -155,11 +164,9 @@ install_termux_native_deps() {
     echo ""
     log_info "Installing Termux-native packages..."
 
-    # Update package list (non-fatal on warnings)
-    pkg update -y -o Dpkg::Options::="--force-confnew" || log_warn "pkg update had warnings (continuing)"
-    pkg upgrade -y -o Dpkg::Options::="--force-confnew" || log_warn "pkg upgrade had warnings (continuing)"
+    pkg update -y -o Dpkg::Options::="--force-confnew" || log_warn "pkg update had warnings"
+    pkg upgrade -y -o Dpkg::Options::="--force-confnew" || log_warn "pkg upgrade had warnings"
 
-    # Core build tools
     local CORE_PKGS="git python clang cmake ninja"
     for pkg_name in $CORE_PKGS; do
         if command -v "$pkg_name" &>/dev/null; then
@@ -173,47 +180,41 @@ install_termux_native_deps() {
         fi
     done
 
-    # Build deps for compilation
     pkg install -y build-essential libffi openssl 2>/dev/null || log_warn "Some build deps may have failed"
 
-    # ── cryptography: pkg first, pip fallback (Bug 5: verify after install) ──
+    # ── cryptography (Bug 5: verify after install) ──
     if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
         log_ok "cryptography already importable"
     else
-        log_info "Installing cryptography via Termux pkg (pre-built, no Rust needed)..."
-        pkg install -y python-cryptography
+        log_info "Installing cryptography via Termux pkg..."
+        pkg install -y python-cryptography || true
 
-        # VERIFY it actually works (Bug 5)
         if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
             log_ok "cryptography installed and verified"
         else
             log_warn "pkg cryptography installed but Python can't import it. Trying pip..."
-            # This might need Rust, warn the user
-            if pip install cryptography 2>&1; then
-                if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
-                    log_ok "cryptography installed via pip and verified"
-                else
-                    log_error "cryptography import STILL fails after pip install"
-                fi
+            pip install cryptography 2>&1 || true
+
+            if $PYTHON_CMD -c "import cryptography" 2>/dev/null; then
+                log_ok "cryptography installed via pip and verified"
             else
-                log_error "cryptography installation FAILED — secure storage will be degraded"
+                log_error "cryptography import STILL fails"
             fi
         fi
     fi
 
-    # ── numpy: pkg first, pip fallback ──
+    # ── numpy ──
     if $PYTHON_CMD -c "import numpy" 2>/dev/null; then
         log_ok "numpy already importable"
     else
-        log_info "Installing numpy via Termux pkg (pre-built)..."
-        pkg install -y python-numpy
+        log_info "Installing numpy via Termux pkg..."
+        pkg install -y python-numpy || true
 
-        # VERIFY
         if $PYTHON_CMD -c "import numpy" 2>/dev/null; then
             log_ok "numpy installed and verified"
         else
-            log_warn "pkg numpy installed but Python can't import it. Trying pip..."
-            pip install numpy || log_error "Failed to install numpy"
+            log_warn "pkg numpy failed, trying pip..."
+            pip install numpy 2>&1 || log_error "Failed to install numpy"
         fi
     fi
 }
@@ -223,39 +224,33 @@ install_pip_deps() {
     echo ""
     log_info "Installing Python dependencies via pip..."
 
-    # Upgrade pip
     $PYTHON_CMD -m pip install --upgrade pip --quiet 2>/dev/null || true
 
     local CORE_DEPS="aiofiles pyyaml psutil python-telegram-bot"
 
     for dep in $CORE_DEPS; do
-        # Map package name to import name
         local import_name="$dep"
         case "$dep" in
             pyyaml)              import_name="yaml" ;;
             python-telegram-bot) import_name="telegram" ;;
         esac
 
-        # Check if already importable
         if $PYTHON_CMD -c "import $import_name" 2>/dev/null; then
             log_ok "$dep already installed"
             continue
         fi
 
-        # Install and verify (Bug 4: don't pipe through tee for exit code)
         log_info "Installing $dep..."
         local pip_output
-        if pip_output=$(pip install "$dep" 2>&1); then
-            # Verify the import actually works
-            if $PYTHON_CMD -c "import $import_name" 2>/dev/null; then
-                log_ok "$dep installed and verified"
-            else
-                log_error "$dep pip says success but import failed!"
-                echo "$pip_output" >> "$LOG_FILE" 2>/dev/null || true
-            fi
+        pip_output=$(pip install "$dep" 2>&1) || true
+
+        if $PYTHON_CMD -c "import $import_name" 2>/dev/null; then
+            log_ok "$dep installed and verified"
         else
             log_error "$dep installation FAILED"
-            echo "$pip_output" >> "$LOG_FILE" 2>/dev/null || true
+            if [ -n "$LOG_FILE" ]; then
+                echo "$pip_output" >> "$LOG_FILE" 2>/dev/null
+            fi
         fi
     done
 }
@@ -271,36 +266,31 @@ install_llm_deps() {
     fi
 
     log_info "Building llama-cpp-python for Termux (may take several minutes)..."
-
-    # Set cmake flags to avoid NDK issues
     export CMAKE_ARGS="-DLLAMA_METAL=off -DLLAMA_CUDA=off"
 
-    # Bug 4 fix: capture output WITHOUT piping through tee
-    # Try pre-built first
+    # Try pre-built first (Bug 4: capture output, don't pipe)
     local pip_output
-    if pip_output=$(pip install llama-cpp-python --only-binary :all: 2>&1); then
-        if $PYTHON_CMD -c "import llama_cpp" 2>/dev/null; then
-            log_ok "llama-cpp-python (pre-built) installed and verified"
-            echo "$pip_output" >> "$LOG_FILE" 2>/dev/null || true
-            return
-        fi
+    pip_output=$(pip install llama-cpp-python --only-binary :all: 2>&1) || true
+
+    if $PYTHON_CMD -c "import llama_cpp" 2>/dev/null; then
+        log_ok "llama-cpp-python (pre-built) installed and verified"
+        return
     fi
 
-    # Pre-built not available (expected on aarch64), try from source
-    log_warn "No pre-built wheel for this platform. Compiling from source..."
-    if pip_output=$(pip install llama-cpp-python --no-cache-dir 2>&1); then
-        if $PYTHON_CMD -c "import llama_cpp" 2>/dev/null; then
-            log_ok "llama-cpp-python compiled and installed"
-        else
-            log_warn "llama-cpp-python pip succeeded but import failed"
-            log_warn "AURA will still run, but in MOCK LLM mode"
-        fi
+    # Pre-built not available, try from source
+    log_warn "No pre-built wheel. Compiling from source..."
+    pip_output=$(pip install llama-cpp-python --no-cache-dir 2>&1) || true
+
+    if $PYTHON_CMD -c "import llama_cpp" 2>/dev/null; then
+        log_ok "llama-cpp-python compiled and installed"
     else
-        log_warn "llama-cpp-python compilation failed (this is OK for now)"
-        log_warn "AURA will run in MOCK LLM mode. Install manually later with:"
-        log_warn "  pip install llama-cpp-python --no-cache-dir"
+        log_warn "llama-cpp-python failed (AURA will use mock LLM mode)"
+        log_warn "Install manually later: pip install llama-cpp-python --no-cache-dir"
     fi
-    echo "$pip_output" >> "$LOG_FILE" 2>/dev/null || true
+
+    if [ -n "$LOG_FILE" ]; then
+        echo "$pip_output" >> "$LOG_FILE" 2>/dev/null
+    fi
 }
 
 # ─── Verify All Imports ──────────────────────────────────────────────────────
@@ -358,14 +348,12 @@ setup_env() {
         log_warn ".env exists but TELEGRAM_TOKEN is empty"
     fi
 
-    # Interactive token setup
     echo ""
     echo -e "${BOLD}Telegram Bot Token Setup${NC}"
     echo "Get your token from @BotFather on Telegram."
     echo ""
     echo -n "Paste your bot token (or press Enter to skip): "
 
-    # Read from terminal directly (script is piped via curl | bash)
     read -r TOKEN </dev/tty || true
 
     if [ -n "$TOKEN" ]; then
@@ -450,7 +438,6 @@ main() {
     echo -e "${BOLD}══════════════════════════════════════════${NC}"
     echo ""
 
-    # Check/Repair modes
     if [ "$CHECK_MODE" = true ]; then
         check_platform
         run_check
@@ -461,8 +448,6 @@ main() {
         run_repair
     fi
 
-    # ── Full Install Flow ────────────────────────────────────────────────────
-
     echo -e "${BLUE}[1/7]${NC} Checking platform..."
     check_platform
 
@@ -470,7 +455,7 @@ main() {
     echo -e "${BLUE}[2/7]${NC} Cloning / updating repository..."
     clone_or_update
 
-    # ── Phase 2: Enable file logging NOW (Bug 1) ────────────────────────────
+    # Enable file logging NOW (Bug 1)
     enable_file_logging
 
     echo ""
@@ -493,7 +478,6 @@ main() {
     echo -e "${BLUE}[7/7]${NC} Configuring environment..."
     setup_env
 
-    # ── Final Verification ───────────────────────────────────────────────────
     verify_all_imports
 
     # ── Summary (Bug 6: absolute paths) ──────────────────────────────────────
