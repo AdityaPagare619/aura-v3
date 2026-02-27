@@ -228,7 +228,7 @@ class BackgroundResourceManager:
     async def _update_resource_state(self):
         """Update current resource usage (non-blocking)"""
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             # Batch all psutil calls into a single executor call to avoid
             # blocking the asyncio event loop (psutil I/O can take 100ms+)
