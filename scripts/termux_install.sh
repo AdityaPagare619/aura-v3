@@ -13,7 +13,7 @@
 
 set -e
 
-# ─── Colors ──────────────────────────────────────────────────────────────────────
+# ─── Colors ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -21,7 +21,7 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# ─── Globals ─────────────────────────────────────────────────────────────────────
+# ─── Globals ─────────────────────────────────────────────────────────────────
 AURA_DIR="$HOME/aura-v3"
 LOG_FILE="$AURA_DIR/logs/install.log"
 REPAIR_MODE=false
@@ -29,7 +29,7 @@ CHECK_MODE=false
 VERBOSE=false
 ERRORS_FOUND=0
 
-# ─── Parse arguments ────────────────────────────────────────────────────────────
+# ─── Parse arguments ─────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case $1 in
         --repair)  REPAIR_MODE=true; shift ;;
@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ─── Logging ─────────────────────────────────────────────────────────────────────
+# ─── Logging ─────────────────────────────────────────────────────────────────
 log_info()  { echo -e "${BLUE}[INFO]${NC}  $1"; echo "[INFO]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null || true; }
 log_ok()    { echo -e "${GREEN}[OK]${NC}    $1"; echo "[OK]    $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null || true; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $1"; echo "[WARN]  $(date +%H:%M:%S) $1" >> "$LOG_FILE" 2>/dev/null || true; }
@@ -57,7 +57,7 @@ run_cmd() {
     return ${PIPESTATUS[0]:-$?}
 }
 
-# ─── Platform Check ──────────────────────────────────────────────────────────────
+# ─── Platform Check ──────────────────────────────────────────────────────────
 check_platform() {
     if [ -z "$TERMUX_VERSION" ] && [ ! -d "/data/data/com.termux" ]; then
         log_error "This script is for Termux only! Use scripts/install-aura.sh for other platforms."
@@ -92,7 +92,7 @@ check_platform() {
     log_info "Architecture: $ARCH"
 }
 
-# ─── Check Mode ─────────────────────────────────────────────────────────────────
+# ─── Check Mode ──────────────────────────────────────────────────────────────
 run_check() {
     echo ""
     echo -e "${BOLD}══════════════════════════════════════${NC}"
@@ -147,7 +147,7 @@ run_check() {
     exit 0
 }
 
-# ─── Repair Mode ────────────────────────────────────────────────────────────────
+# ─── Repair Mode ─────────────────────────────────────────────────────────────
 run_repair() {
     echo ""
     echo -e "${BOLD}══════════════════════════════════════${NC}"
@@ -171,7 +171,7 @@ run_repair() {
     exit $ERRORS_FOUND
 }
 
-# ─── Install Termux-Native Packages ────────────────────────────────────────────
+# ─── Install Termux-Native Packages ──────────────────────────────────────────
 install_termux_native_deps() {
     echo ""
     log_info "Installing Termux-native packages..."
@@ -219,7 +219,7 @@ install_termux_native_deps() {
     pkg install -y build-essential libffi openssl 2>/dev/null || true
 }
 
-# ─── Install Pip Dependencies ──────────────────────────────────────────────────
+# ─── Install Pip Dependencies ────────────────────────────────────────────────
 install_pip_deps() {
     echo ""
     log_info "Installing Python dependencies via pip..."
@@ -259,7 +259,7 @@ install_pip_deps() {
     done
 }
 
-# ─── Verify All Imports ─────────────────────────────────────────────────────────
+# ─── Verify All Imports ──────────────────────────────────────────────────────
 verify_all_imports() {
     echo ""
     echo -e "${BOLD}── Verifying All Imports ──${NC}"
@@ -293,7 +293,7 @@ verify_all_imports() {
     fi
 }
 
-# ─── Setup .env ─────────────────────────────────────────────────────────────────
+# ─── Setup .env ──────────────────────────────────────────────────────────────
 setup_env() {
     echo ""
     log_info "Setting up configuration..."
@@ -357,14 +357,14 @@ setup_env() {
     fi
 }
 
-# ─── Create Directories ─────────────────────────────────────────────────────────
+# ─── Create Directories ─────────────────────────────────────────────────────
 create_dirs() {
     log_info "Creating directories..."
     mkdir -p logs data/memories data/sessions data/patterns/intents data/patterns/strategies data/memory models cache
     log_ok "Directories created"
 }
 
-# ─── Clone or Update ─────────────────────────────────────────────────────────────
+# ─── Clone or Update ─────────────────────────────────────────────────────────
 clone_or_update() {
     echo ""
     log_info "Getting AURA v3..."
@@ -372,11 +372,20 @@ clone_or_update() {
     cd ~
 
     if [ -d "$AURA_DIR/.git" ]; then
+        # Existing repo — update it
         log_info "Updating existing installation..."
         cd "$AURA_DIR"
         git pull origin main || log_warn "Could not update (using existing version)"
         log_ok "AURA updated"
+    elif [ -d "$AURA_DIR" ]; then
+        # Directory exists but no .git — leftover from partial install
+        log_warn "Found leftover $AURA_DIR without .git — cleaning up..."
+        rm -rf "$AURA_DIR"
+        git clone https://github.com/AdityaPagare619/aura-v3.git "$AURA_DIR"
+        cd "$AURA_DIR"
+        log_ok "AURA cloned fresh to $AURA_DIR"
     else
+        # Fresh install
         log_info "Cloning AURA v3..."
         git clone https://github.com/AdityaPagare619/aura-v3.git "$AURA_DIR"
         cd "$AURA_DIR"
@@ -384,7 +393,7 @@ clone_or_update() {
     fi
 }
 
-# ─── Main Install ────────────────────────────────────────────────────────────────
+# ─── Main Install ────────────────────────────────────────────────────────────
 main() {
     echo ""
     echo -e "${BOLD}══════════════════════════════════════════${NC}"
@@ -392,27 +401,28 @@ main() {
     echo -e "${BOLD}══════════════════════════════════════════${NC}"
     echo ""
 
-    # Create log dir early
-    mkdir -p "$AURA_DIR/logs" 2>/dev/null || mkdir -p "$HOME/aura-v3/logs" 2>/dev/null || true
-    echo "=== AURA Install Log $(date) ===" > "$LOG_FILE" 2>/dev/null || true
-
-    # Check/Repair modes
+    # Check/Repair modes (before creating any dirs)
     if [ "$CHECK_MODE" = true ]; then
         check_platform
         run_check
     fi
 
     if [ "$REPAIR_MODE" = true ]; then
+        check_platform
         run_repair
     fi
 
-    # ── Full Install Flow ─────────────────────────────────────────────────────────
+    # ── Full Install Flow ────────────────────────────────────────────────────
     echo -e "${BLUE}[1/6]${NC} Checking platform..."
     check_platform
 
     echo ""
     echo -e "${BLUE}[2/6]${NC} Cloning / updating repository..."
     clone_or_update
+
+    # Create log dir AFTER clone (so it's inside the repo)
+    mkdir -p "$AURA_DIR/logs" 2>/dev/null || true
+    echo "=== AURA Install Log $(date) ===" > "$LOG_FILE" 2>/dev/null || true
 
     echo ""
     echo -e "${BLUE}[3/6]${NC} Installing Termux-native packages..."
@@ -430,10 +440,10 @@ main() {
     echo -e "${BLUE}[6/6]${NC} Configuring environment..."
     setup_env
 
-    # ── Final Verification ────────────────────────────────────────────────────────
+    # ── Final Verification ───────────────────────────────────────────────────
     verify_all_imports
 
-    # ── LLM (optional) ───────────────────────────────────────────────────────────
+    # ── LLM (optional) ───────────────────────────────────────────────────────
     echo ""
     log_info "LLM support (optional)..."
     if $PYTHON_CMD -m pip install llama-cpp-python --only-binary :all: --quiet 2>/dev/null; then
@@ -442,7 +452,7 @@ main() {
         log_warn "LLM not installed — AURA will use MOCK mode (install later: pip install llama-cpp-python)"
     fi
 
-    # ── Summary ──────────────────────────────────────────────────────────────────
+    # ── Summary ──────────────────────────────────────────────────────────────
     echo ""
     echo -e "${BOLD}══════════════════════════════════════════${NC}"
 
